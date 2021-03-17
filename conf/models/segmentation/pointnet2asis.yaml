@@ -1,0 +1,48 @@
+models:
+    PointNet2ASIS_PAPER:
+        class: pointnet2asis.PointNet2ASIS
+        conv_type: "DENSE"
+        # use_category: ${data.use_category}
+        down_conv:
+            module_name: PointNetMSGDown # as PointNetSA Module
+            npoint: [1024, 256, 64, 16]
+            radii: [[0.1], [0.2], [0.4], [0.8]]
+            nsamples: [[32], [32], [32], [32]]
+            down_conv_nn:
+                [
+                    [[FEAT+3, 32, 32, 64]],
+                    [[64+3, 64, 64, 128]],
+                    [[128+3, 128, 128, 256]],
+                    [[256+3, 256, 256, 512]],
+                ]
+        up_conv:
+            module_name: DenseDualFPModule
+            up_conv_nn:
+                [
+                    [512 + 256, 256, 256],
+                    [256 + 128, 256, 256],
+                    [256 + 64, 256, 128],
+                    [128 + FEAT, 128, 128, 128],
+                ]
+            skip: True
+        # innermost:
+        #     module_name: CopyModule
+        #     num_copies: 2
+        asis:
+            input_dim: 128
+            ins_output_dim: 5
+            # dropout: 0.5
+            k: 30
+        loss:
+            cross_entropy_loss: # semantic loss
+                loss_weights: 1.0
+            discriminative_loss: # instance loss
+                loss_weights: 1.0
+                delta_d: 1.5
+                delta_v: 0.5
+                var: 1.0 # alpha
+                dist: 1.0 # beta
+                reg: 0.001 # gamma
+                norm_p: 1
+
+

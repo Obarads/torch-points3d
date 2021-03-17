@@ -186,6 +186,162 @@ def to_ply(pos, label, file):
     el = PlyElement.describe(ply_array, "S3DIS")
     PlyData([el], byte_order=">").write(file)
 
+def t2n(tensor):
+    """Convert torch.tensor to numpy.ndarray.
+
+    Parameters
+    ----------
+    tensor : torch.tensor
+        torch.tensor you want to convert to numpy.array.
+
+    Returns
+    -------
+    array : numpy.ndarray
+        numpy.ndarray converted
+    """
+    return tensor.cpu().detach().numpy()
+
+def sample_data(data, num_sample):
+    """ data is in N x ...
+        we want to keep num_samplexC of them.
+        if N > num_sample, we will randomly keep num_sample of them.
+        if N < num_sample, we will randomly duplicate samples.
+    """
+    N = data.shape[0]
+    if (N == num_sample):
+        return data, range(N)
+    elif (N > num_sample):
+        sample = np.random.choice(N, num_sample)
+        return data[sample, ...], sample
+    else:
+        sample = np.random.choice(N, num_sample-N)
+        dup_data = data[sample, ...]
+        # fix range bug for python3 (warry): range(N)->list(range(N))
+        return np.concatenate([data, dup_data], 0), list(range(N))+list(sample) 
+
+def sample_data_label(data, label, inslabel, num_sample):
+    new_data, sample_indices = sample_data(data, num_sample)
+    new_label = label[sample_indices]
+    new_inslabel = inslabel[sample_indices]
+    return new_data, new_label, new_inslabel
+
+# Ref: https://github.com/WXinlong/ASIS/blob/d71c3d60e985f5bebe620c8e1a1cb0042fb2f5f6/indoor3d_util.py#L137
+# Split single room data into blocks.
+# room2blocks: Not implementation with torch.
+# B = number of blocks in single room.
+# points : (B, N, 6) xyzrgb
+# sem_labels : (B, N) semantic labels
+# ins_labels : (B, N) instance labels
+def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
+                random_sample=False, sample_num=None, sample_aug=1):
+    """ Prepare block training data.
+    Args:
+        data: N x 6 numpy array, 012 are XYZ in meters, 345 are RGB in [0,1]
+            assumes the data is shifted (min point is origin) and aligned
+            (aligned with XYZ axis)
+        label: N size uint8 numpy array from 0-12
+        num_point: int, how many points to sample in each block
+        block_size: float, physical size of the block in meters
+        stride: float, stride for block sweeping
+        random_sample: bool, if True, we will randomly sample blocks in the room
+        sample_num: int, if random sample, how many blocks to sample
+            [default: room area]
+        sample_aug: if random sample, how much aug
+    Returns:
+        block_datas: K x num_point x 6 np array of XYZRGB, RGB is in [0,1]
+        block_labels: K x num_point x 1 np array of uint8 labels
+        block_labels: K x num_point x 1 np array of uint8 labels
+        
+    TODO: for this version, blocking is in fixed, non-overlapping pattern.
+    """
+    assert(stride<=block_size)
+
+    limit = np.amax(data, 0)[0:3]
+     
+    # Get the corner location for our sampling blocks    
+    xbeg_list = []
+    ybeg_list = []
+    if not random_sample:
+        num_block_x = int(np.ceil((limit[0] - block_size) / stride)) + 1
+        num_block_y = int(np.ceil((limit[1] - block_size) / stride)) + 1
+        for i in range(num_block_x):
+            if i % 2 == 0:
+                for j in range(num_block_y):
+                    xbeg_list.append(i*stride)
+                    ybeg_list.append(j*stride)
+            else:
+                for j in range(num_block_y)[::-1]:
+                    xbeg_list.append(i*stride)
+                    ybeg_list.append(j*stride)
+
+    else:
+        num_block_x = int(np.ceil(limit[0] / block_size))
+        num_block_y = int(np.ceil(limit[1] / block_size))
+        if sample_num is None:
+            sample_num = num_block_x * num_block_y * sample_aug
+        for _ in range(sample_num):
+            xbeg = np.random.uniform(-block_size, limit[0]) 
+            ybeg = np.random.uniform(-block_size, limit[1]) 
+            xbeg_list.append(xbeg)
+            ybeg_list.append(ybeg)
+
+    # Collect blocks
+    block_data_list = []
+    block_label_list = []
+    block_inslabel_list = []
+    idx = 0
+    for idx in range(len(xbeg_list)): 
+       xbeg = xbeg_list[idx]
+       ybeg = ybeg_list[idx]
+       xcond = (data[:,0]<=xbeg+block_size) & (data[:,0]>=xbeg)
+       ycond = (data[:,1]<=ybeg+block_size) & (data[:,1]>=ybeg)
+       cond = xcond & ycond
+       if np.sum(cond) < 100: # discard block if there are less than 100 pts.
+           continue
+       
+       block_data = data[cond, :]
+       block_label = label[cond]
+       block_inslabel = inslabel[cond]
+       
+       # randomly subsample data
+       block_data_sampled, block_label_sampled, block_inslabel_sampled = \
+           sample_data_label(block_data, block_label, block_inslabel, num_point)
+       block_data_list.append(np.expand_dims(block_data_sampled, 0))
+       block_label_list.append(np.expand_dims(block_label_sampled, 0))
+       block_inslabel_list.append(np.expand_dims(block_inslabel_sampled, 0))
+            
+    return np.concatenate(block_data_list, 0), \
+           np.concatenate(block_label_list, 0),\
+           np.concatenate(block_inslabel_list, 0)
+
+def room2blocks_plus_normalized(data_label, num_point, block_size, stride,
+                                random_sample, sample_num, sample_aug):
+    """ room2block, with input filename and RGB preprocessing.
+        for each block centralize XYZ, add normalized XYZ as 678 channels
+    """
+    data = data_label[:,0:6]
+    data[:,3:6] /= 255.0
+    label = data_label[:,-2].astype(np.uint8)
+    inslabel = data_label[:,-1].astype(np.uint8)
+    max_room_x = max(data[:,0])
+    max_room_y = max(data[:,1])
+    max_room_z = max(data[:,2])
+    
+    data_batch, label_batch, inslabel_batch = room2blocks(data, label, inslabel, num_point, block_size, stride,
+                                          random_sample, sample_num, sample_aug)
+    new_data_batch = np.zeros((data_batch.shape[0], num_point, 9))
+    for b in range(data_batch.shape[0]):
+        new_data_batch[b, :, 6] = data_batch[b, :, 0]/max_room_x
+        new_data_batch[b, :, 7] = data_batch[b, :, 1]/max_room_y
+        new_data_batch[b, :, 8] = data_batch[b, :, 2]/max_room_z
+        minx = min(data_batch[b, :, 0])
+        miny = min(data_batch[b, :, 1])
+        data_batch[b, :, 0] -= (minx+block_size/2)
+        data_batch[b, :, 1] -= (miny+block_size/2)
+    new_data_batch[:, :, 0:6] = data_batch
+    return new_data_batch, label_batch, inslabel_batch
+
+
 
 ################################### 1m cylinder s3dis ###################################
 
@@ -697,3 +853,264 @@ class S3DISFusedDataset(BaseDataset):
         from torch_points3d.metrics.s3dis_tracker import S3DISTracker
 
         return S3DISTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
+
+
+class S3DIS1x1Ins(S3DISOriginalFused):
+    r"""Create 1m x 1m block datasets with instance labels from room data of S3DIS.
+    
+    The (pre-processed) Stanford Large-Scale 3D Indoor Spaces dataset from
+    the `"3D Semantic Parsing of Large-Scale Indoor Spaces"
+    <http://buildingparser.stanford.edu/images/3D_Semantic_Parsing.pdf>`_
+    paper, containing point clouds of six large-scale indoor parts in three
+    buildings with 12 semantic elements (and one clutter class).
+
+    Args:
+        root (string): Root directory where the dataset should be saved.
+        test_area (int, optional): Which area to use for testing (1-6).
+            (default: :obj:`6`)
+        train (bool, optional): If :obj:`True`, loads the training dataset,
+            otherwise the test dataset. (default: :obj:`True`)
+        transform (callable, optional): A function/transform that takes in an
+            :obj:`torch_geometric.data.Data` object and returns a transformed
+            version. The data object will be transformed before every access.
+            (default: :obj:`None`)
+        pre_transform (callable, optional): A function/transform that takes in
+            an :obj:`torch_geometric.data.Data` object and returns a
+            transformed version. The data object will be transformed before
+            being saved to disk. (default: :obj:`None`)
+        pre_filter (callable, optional): A function that takes in an
+            :obj:`torch_geometric.data.Data` object and returns a boolean
+            value, indicating whether the data object should be included in the
+            final dataset. (default: :obj:`None`)
+    """
+
+    num_points = 4096
+    block_size = 1.0
+    stride = 0.5
+
+    @property
+    def pre_processed_path(self):
+        # pre_processed_file_names = "preprocessed.pt"
+        # return os.path.join(self.processed_dir, pre_processed_file_names)
+        return None
+
+    @property
+    def processed_file_names(self):
+        test_area = self.test_area
+        return (
+            ["{}_{}.pt".format(s, test_area) for s in ["train", "val", "test", "trainval"]]
+            + self.raw_areas_paths
+            # + [self.pre_processed_path]
+        )
+
+    def download(self):
+        super().download()
+
+    def process(self):
+        train_areas = [f for f in self.folders if str(self.test_area) not in f]
+        test_areas = [f for f in self.folders if str(self.test_area) in f]
+
+        train_files = [
+            (f, room_name, osp.join(self.raw_dir, f, room_name))
+            for f in train_areas
+            for room_name in os.listdir(osp.join(self.raw_dir, f))
+            if os.path.isdir(osp.join(self.raw_dir, f, room_name))
+        ]
+
+        test_files = [
+            (f, room_name, osp.join(self.raw_dir, f, room_name))
+            for f in test_areas
+            for room_name in os.listdir(osp.join(self.raw_dir, f))
+            if os.path.isdir(osp.join(self.raw_dir, f, room_name))
+        ]
+
+        # Gather data per area
+        data_list = [[] for _ in range(6)]
+        block_data_list = [[] for _ in range(6)]
+        # if self.debug:
+        #     areas = np.zeros(7)
+        for (area, room_name, file_path) in tq(train_files + test_files):
+            # print(area, room_name, file_path, self.pre_processed_path)
+            # if self.debug:
+            #     area_idx = int(area.split("_")[-1])
+            #     if areas[area_idx] == 5:
+            #         continue
+            #     else:
+            #         print(area_idx)
+            #         areas[area_idx] += 1
+
+            area_num = int(area[-1]) - 1
+
+            # single room data
+            xyz, rgb, semantic_labels, instance_labels, room_label = read_s3dis_format(
+                file_path, room_name, label_out=True, verbose=self.verbose, debug=self.debug
+            )
+            rgb_norm = rgb.float() / 255.0
+
+
+            ###### for raw_area data
+            data = Data(pos=xyz, y=semantic_labels, rgb=rgb_norm)
+            if room_name in VALIDATION_ROOMS:
+                data.validation_set = True
+            else:
+                data.validation_set = False
+
+            if self.keep_instance:
+                data.instance_labels = instance_labels
+
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
+
+            data_list[area_num].append(data)
+            ###### end
+
+
+            ###### for block data (block = 1x1m region)
+            # Localize
+            xyz_min = torch.min(xyz, dim=0)[0]
+            modified_xyz = xyz - xyz_min
+            # Split single room data into blocks.
+            points, sem_labels, ins_labels = room2blocks(
+                t2n(torch.cat([modified_xyz, rgb_norm], dim=1)), 
+                t2n(semantic_labels), t2n(instance_labels), self.num_points, 
+                block_size=self.block_size, stride=self.stride
+            )
+            # From numpy to torch
+            points = torch.from_numpy(points).to(torch.float32)
+            sem_labels = torch.from_numpy(sem_labels).to(torch.long)
+            ins_labels = torch.from_numpy(ins_labels).to(torch.long)
+
+            # Get block in single room
+            num_blocks = len(points)
+            block_list = []
+            for i in range(num_blocks):
+                # From torch to torch_geometric
+                block = Data(pos=points[i, :, :3], x=points[i, :, 3:])
+                block.y = sem_labels[i]
+
+                # set validation_set
+                if room_name in VALIDATION_ROOMS:
+                    block.validation_set = True
+                else:
+                    block.validation_set = False
+
+                # set keep_instance
+                if self.keep_instance:
+                    block.instance_labels = ins_labels[i]
+
+                block_list.append(block)
+
+            block_data_list[area_num] += block_list
+            ##### end
+
+        # Save raw_area data
+        raw_areas = cT.PointCloudFusion()(data_list)
+        for i, area in enumerate(raw_areas):
+            torch.save(area, self.raw_areas_paths[i])
+
+        # Split block_data_list into train_data_list, val_data_list, 
+        # test_data_list and trainval_data_list
+        train_data_list = {}
+        val_data_list = {}
+        trainval_data_list = {}
+        for i in range(6):
+            if i != self.test_area - 1:
+                train_data_list[i] = []
+                val_data_list[i] = []
+                for data in block_data_list[i]:
+                    validation_set = data.validation_set
+                    del data.validation_set
+                    if validation_set:
+                        val_data_list[i].append(data)
+                    else:
+                        train_data_list[i].append(data)
+                trainval_data_list[i] = val_data_list[i] + train_data_list[i]
+
+        def concat_data_list(_list):
+            """concat elements in list for python2 and python3.
+            """
+            _res = []
+            for _l in _list: _res += _l
+            return _res
+
+        train_data_list = concat_data_list(list(train_data_list.values()))
+        val_data_list = concat_data_list(list(val_data_list.values()))
+        trainval_data_list = concat_data_list(list(trainval_data_list.values()))
+        test_data_list = block_data_list[self.test_area - 1]
+
+        # pre_collate_transform
+        if self.pre_collate_transform:
+            log.info("pre_collate_transform ...")
+            log.info(self.pre_collate_transform)
+            train_data_list = self.pre_collate_transform(train_data_list)
+            val_data_list = self.pre_collate_transform(val_data_list)
+            test_data_list = self.pre_collate_transform(test_data_list)
+            trainval_data_list = self.pre_collate_transform(trainval_data_list)
+
+        # Save block data
+        # block data shape: (B, N(, C))
+        self._save_data(train_data_list, val_data_list, test_data_list, trainval_data_list)
+
+
+class S3DIS1x1InsDataset(BaseDataset):
+    """Create 1m x 1m block datasets with instance labels from room data of S3DIS.
+    """
+    def __init__(self, dataset_opt):
+        super().__init__(dataset_opt)
+
+        # Note
+        # dataset_opt.use_trainval_data is
+        #   True: not split train and val (author implementation) 
+        #   False: split train and val
+        use_trainval_data:bool = dataset_opt.use_trainval_data
+        if use_trainval_data:
+            self.train_dataset = S3DIS1x1Ins(
+                self._data_path,
+                test_area=self.dataset_opt.fold,
+                split="trainval",
+                pre_collate_transform=None,
+                transform=self.train_transform,
+                keep_instance=True
+            )
+        else:
+            self.train_dataset = S3DIS1x1Ins(
+                self._data_path,
+                test_area=self.dataset_opt.fold,
+                split="train",
+                pre_collate_transform=None,
+                transform=self.train_transform,
+                keep_instance=True
+            )
+            self.val_dataset = S3DIS1x1Ins(
+                self._data_path,
+                test_area=self.dataset_opt.fold,
+                split="val",
+                pre_collate_transform=None,
+                transform=self.val_transform,
+                keep_instance=True
+            )
+
+        self.test_dataset = S3DIS1x1Ins(
+            self._data_path,
+            test_area=self.dataset_opt.fold,
+            split="test",
+            pre_collate_transform=None,
+            transform=self.test_transform,
+            keep_instance=True
+        )
+
+        if dataset_opt.class_weight_method:
+            self.add_weights(class_weight_method=dataset_opt.class_weight_method)
+
+    def get_tracker(self, wandb_log: bool, tensorboard_log: bool):
+        """Factory method for the tracker
+
+        Arguments:
+            wandb_log - Log using weight and biases
+            tensorboard_log - Log using tensorboard
+        Returns:
+            [BaseTracker] -- tracker
+        """
+        from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
+
+        return SegmentationTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
