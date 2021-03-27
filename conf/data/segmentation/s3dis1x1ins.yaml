@@ -5,11 +5,11 @@ data:
     dataroot: data
     fold: 5
     use_trainval_data: True # use trainval_data
-    class_weight_method: "sqrt"
+    class_weight_method: null
     use_category: False
-    train_transforms:
-        - transform: FixedPoints
-          lparams: [4096]
+    # train_transforms:
+        # - transform: FixedPoints
+          # lparams: [4096]
         # - transform: RandomTranslate
         #   params:
         #       translate: 0.01
@@ -18,6 +18,6 @@ data:
         #       degrees: 180
         #       axis: 2
 
-    test_transforms:
-        - transform: FixedPoints
-          lparams: [4096]
+    # test_transforms:
+        # - transform: FixedPoints
+          # lparams: [4096]

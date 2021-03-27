@@ -314,21 +314,57 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
            np.concatenate(block_label_list, 0),\
            np.concatenate(block_inslabel_list, 0)
 
-def room2blocks_plus_normalized(data_label, num_point, block_size, stride,
-                                random_sample, sample_num, sample_aug):
-    """ room2block, with input filename and RGB preprocessing.
-        for each block centralize XYZ, add normalized XYZ as 678 channels
+# def room2blocks_plus_normalized(data_label, num_point, block_size, stride,
+#                                 random_sample, sample_num, sample_aug):
+#     """ room2block, with input filename and RGB preprocessing.
+#         for each block centralize XYZ, add normalized XYZ as 678 channels
+#     """
+#     data = data_label[:,0:6]
+#     data[:,3:6] /= 255.0
+#     label = data_label[:,-2].astype(np.uint8)
+#     inslabel = data_label[:,-1].astype(np.uint8)
+def room2blocks_plus_normalized(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
+                random_sample=False, sample_num=None, sample_aug=1):
     """
-    data = data_label[:,0:6]
-    data[:,3:6] /= 255.0
-    label = data_label[:,-2].astype(np.uint8)
-    inslabel = data_label[:,-1].astype(np.uint8)
+    Parameters
+    ----------
+    data: np.ndarry (N, 6)
+        xyzrgb points in a room
+    label: np.ndarray (N)
+        semantic labels in a room
+    inslabel: np.ndarray (N)
+        instance labels in a room
+    num_point: int
+        number of points in a block
+    block_size: float
+        block size
+    stride: float
+        stride for block sweeping
+    random_sample: bool
+        if True, we will randomly sample blocks in the room
+    sample_num: int 
+        if random sample, how many blocks to sample [default: None]
+    sample_aug: 
+        if random sample, how much aug
+
+    Returns
+    -------
+    new_data_batch: np.ndarray (K, num_point, 9) 
+        np array of XYZRGBnormalizedXYZ, RGB is in [0,1]
+    label_batch: np.ndarray (K, num_point) 
+        np array of uint8 labels
+    inslabel_batch: np.ndarray (K, num_point) 
+        np array of uint8 labels
+    """
+
     max_room_x = max(data[:,0])
     max_room_y = max(data[:,1])
     max_room_z = max(data[:,2])
     
-    data_batch, label_batch, inslabel_batch = room2blocks(data, label, inslabel, num_point, block_size, stride,
-                                          random_sample, sample_num, sample_aug)
+    data_batch, label_batch, inslabel_batch = room2blocks(
+        data, label, inslabel, num_point, block_size, stride, random_sample, 
+        sample_num, sample_aug)
+
     new_data_batch = np.zeros((data_batch.shape[0], num_point, 9))
     for b in range(data_batch.shape[0]):
         new_data_batch[b, :, 6] = data_batch[b, :, 0]/max_room_x
@@ -970,7 +1006,7 @@ class S3DIS1x1Ins(S3DISOriginalFused):
             xyz_min = torch.min(xyz, dim=0)[0]
             modified_xyz = xyz - xyz_min
             # Split single room data into blocks.
-            points, sem_labels, ins_labels = room2blocks(
+            points, sem_labels, ins_labels = room2blocks_plus_normalized(
                 t2n(torch.cat([modified_xyz, rgb_norm], dim=1)), 
                 t2n(semantic_labels), t2n(instance_labels), self.num_points, 
                 block_size=self.block_size, stride=self.stride

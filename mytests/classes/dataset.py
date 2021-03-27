@@ -130,7 +130,7 @@ class S3DIS1x1InsDataset(BaseDataset):
             pre_transform=pre_transform,
             transform=self.test_transform,
         )
-        if dataset_opt.class_weight_method:
+        if dataset_opt.class_weight_method is not None:
             self.add_weights(class_weight_method=dataset_opt.class_weight_method)
 
     def get_tracker(self, wandb_log: bool, tensorboard_log: bool):
