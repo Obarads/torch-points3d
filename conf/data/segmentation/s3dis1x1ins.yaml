@@ -1,3 +1,4 @@
+# @package data
 # Note: you can select trainval_data (author impl.) or train_data as training data.
 data:
     task: segmentation
