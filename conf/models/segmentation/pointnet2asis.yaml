@@ -1,3 +1,5 @@
+# @package models
+# Associatively Segmenting Instances and Semantics in Point Clouds (https://arxiv.org/abs/1902.09852)
 models:
     PointNet2ASIS_PAPER:
         class: pointnet2asis.PointNet2ASIS
@@ -16,7 +18,7 @@ models:
                     [[256+3, 256, 256, 512]],
                 ]
         up_conv:
-            module_name: DenseDualFPModule
+            module_name: DenseFPModules
             up_conv_nn:
                 [
                     [512 + 256, 256, 256],

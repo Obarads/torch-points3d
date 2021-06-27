@@ -20,6 +20,7 @@ from torch_points3d.core.losses import DiscriminativeLoss
 
 log = logging.getLogger(__name__)
 
+
 class PointNet2ASIS(UnetBasedModel):
     def __init__(self, option, model_type, dataset, modules):
         UnetBasedModel.__init__(self, option, model_type, dataset, modules)
@@ -132,8 +133,7 @@ class PointNet2ASIS(UnetBasedModel):
         ins_data = self.ins_layer(ins_data.x)
         self.pred_sem, self.embed_ins = self.asis(sem_data, ins_data)
 
-        if self.opt.get_pred_ins_label:
-            # Sets visual data for debugging
+        if self.training():
             with torch.no_grad():
                 # self._dump_visuals(epoch)
                 num_clusters, labels, cluster_centers = self._cluster(self.embed_ins)
