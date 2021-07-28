@@ -1,12 +1,17 @@
+import enum
 import os
 import os.path as osp
 from itertools import repeat, product
+from time import process_time
 import numpy as np
 import h5py
+from numpy.core.shape_base import block
+from requests import structures
 import torch
 import random
 import glob
 from plyfile import PlyData, PlyElement
+import torch_geometric
 from torch_geometric.data import InMemoryDataset, Data, extract_zip, Dataset
 from torch_geometric.data.dataset import files_exist
 from torch_geometric.data import DataLoader
@@ -20,6 +25,8 @@ import pandas as pd
 import pickle
 import gdown
 import shutil
+
+from tqdm.std import tqdm
 
 from torch_points3d.datasets.samplers import BalancedRandomSampler
 import torch_points3d.core.data_transform as cT
@@ -891,7 +898,232 @@ class S3DISFusedDataset(BaseDataset):
         return S3DISTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
 
 
-class S3DIS1x1Ins(S3DISOriginalFused):
+class S3DIS1x1Ins(InMemoryDataset):
+    """New dataset
+    """
+
+    form_url = (
+        "https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1"
+    )
+    download_url = "https://drive.google.com/uc?id=0BweDykwS9vIobkVPN0wzRzFwTDg&export=download"
+    zip_name = "Stanford3dDataset_v1.2_Version.zip"
+    path_file = osp.join(DIR, "s3dis.patch")
+    file_name = "Stanford3dDataset_v1.2"
+    folders = ["Area_{}".format(i) for i in range(1, 7)]
+    num_classes = S3DIS_NUM_CLASSES
+
+    num_points = 4096
+    block_size = 1.0
+    stride = 0.5
+    valid_slice_types = ['block', 'room']
+
+    def __init__(self,
+                 root,
+                 test_area=6,
+                 train=True,
+                 structure={'train': 'block', 'test': 'room'},
+                 transform=None,
+                 pre_transform=None,
+                 pre_filter=None):
+        assert test_area >= 1 and test_area <= 6
+        self.test_area = test_area
+        assert structure['train'] in self.valid_slice_types
+        assert structure['test'] in self.valid_slice_types
+        self.structure = structure
+
+        super().__init__(root, transform, pre_transform, pre_filter)
+        path = self.processed_paths[0] if train else self.processed_paths[1]
+
+        self.data, slices = torch.load(path)
+        block_slices, room_slices = slices
+        if train:
+            slice_type = self.structure['train']
+        else:
+            slice_type = self.structure['test']
+
+        if slice_type == 'block':
+            self.slices = block_slices
+        elif slice_type == 'room':
+            self.slices = room_slices
+        else:
+            raise ValueError('slice_type is any of these: {}'.format(self.valid_slice_types))
+
+    @property
+    def raw_file_names(self):
+        return self.folders
+
+    @property
+    def processed_file_names(self):
+        test_area = self.test_area
+        return ['{}_{}.pt'.format(s, test_area) for s in ['train', 'test']]
+
+    def download(self):
+        raw_folders = os.listdir(self.raw_dir)
+        if len(raw_folders) == 0:
+            if not os.path.exists(osp.join(self.root, self.zip_name)):
+                log.info("WARNING: You are downloading S3DIS dataset")
+                log.info("Please, register yourself by filling up the form at {}".format(self.form_url))
+                log.info("***")
+                log.info(
+                    "Press any key to continue, or CTRL-C to exit. By continuing, you confirm filling up the form."
+                )
+                input("")
+                gdown.download(self.download_url, osp.join(self.root, self.zip_name), quiet=False)
+            extract_zip(os.path.join(self.root, self.zip_name), self.root)
+            shutil.rmtree(self.raw_dir)
+            os.rename(osp.join(self.root, self.file_name), self.raw_dir)
+            shutil.copy(self.path_file, self.raw_dir)
+            cmd = "patch -ruN -p0 -d  {} < {}".format(self.raw_dir, osp.join(self.raw_dir, "s3dis.patch"))
+            os.system(cmd)
+        else:
+            intersection = len(set(self.folders).intersection(set(raw_folders)))
+            if intersection != 6:
+                shutil.rmtree(self.raw_dir)
+                os.makedirs(self.raw_dir)
+                self.download()
+
+    def collate(self, data_list, room_slices):
+        data, block_slices = super().collate(data_list)
+
+        new_room_slices = {}
+        for key in block_slices:
+            print(key)
+            new_room_slices[key] = torch.tensor(room_slices)
+
+        return data, block_slices, new_room_slices
+
+    def process(self):
+        areas = self.folders
+        # Create pt data that include block data of room
+        area_data_list = [{} for _ in range(6)]  # [area, {room: [points, sem_labels, ins_labels]}]
+        for area in areas:
+            area_num = int(area[-1]) - 1
+            pt_path = osp.join(self.processed_dir, area + '.pt')
+
+            ### Check area pt file
+            if os.path.exists(pt_path):  ### If Area_X.pt is found
+                area_data_list[area_num] = torch.load(pt_path)
+                print("Load preprocessed data ({}.pt)".format(area))
+            else:  ### If Area_X.pt is not found
+                ### Get file paths of Area_X
+                print("Create preprocessed data ({}.pt)".format(area))
+                file_paths = [
+                    (area, room_name, osp.join(self.raw_dir, area, room_name))
+                    for room_name in os.listdir(osp.join(self.raw_dir, area))
+                    if os.path.isdir(osp.join(self.raw_dir, area, room_name))
+                ]
+
+                ### Create room data
+                for (area, room_name, file_path) in file_paths:
+                    ###### extract single room data
+                    xyz, rgb, semantic_labels, instance_labels, room_label = \
+                        read_s3dis_format(file_path, room_name, label_out=True)
+                    rgb_norm = rgb.float() / 255.0
+
+                    ###### create block data (block = 1x1m region)
+                    ### Localize
+                    xyz_min = torch.min(xyz, dim=0)[0]
+                    modified_xyz = xyz - xyz_min
+
+                    ### Split single room data into blocks.
+                    points, sem_labels, ins_labels = room2blocks_plus_normalized(
+                        t2n(torch.cat([modified_xyz, rgb_norm], dim=1)), 
+                        t2n(semantic_labels), t2n(instance_labels), self.num_points, 
+                        block_size=self.block_size, stride=self.stride
+                    )
+
+                    ### add room data to area data list
+                    data = [points, sem_labels, ins_labels]
+                    area_data_list[area_num][room_name] = data
+
+                torch.save(area_data_list[area_num], pt_path)
+                print("Finished creating preprocessed data ({}.pt)".format(area))
+
+        train_list = []
+        test_list = []
+
+        area_room_idx = 0 # room ID
+        train_room_slices = [0]
+        test_room_slices = [0]
+        print("Create dataset ({} and {})".format(self.processed_paths[0], self.processed_paths[1]))
+        for area_num, area_data in enumerate(area_data_list):
+            if area_num+1 == self.test_area:
+                data_list = test_list
+                room_slices= test_room_slices
+            else:
+                data_list = train_list
+                room_slices = train_room_slices
+
+            for room_key in area_data:
+                points, sem_labels, ins_labels = area_data[room_key]
+                check = len(data_list)
+                num_slice = 0
+                for block_idx in range(len(points)):
+                    num_points = len(points[block_idx, :, :3])
+                    data = Data(
+                        pos=torch.from_numpy(points[block_idx, :, :3]),
+                        x=torch.from_numpy(points[block_idx, :, 3:]),
+                        y=torch.from_numpy(sem_labels[block_idx]),
+                        ins_y=torch.from_numpy(ins_labels[block_idx]),
+                        area_room=torch.tensor([area_room_idx]*num_points),
+                        block=torch.tensor([block_idx]*num_points)
+                    )
+                    if self.pre_filter is not None and not self.pre_filter(data):
+                        continue
+                    if self.pre_transform is not None:
+                        data = self.pre_transform(data)
+                    data_list.append(data)
+                    num_slice += data.pos.shape[0]
+
+                if len(data_list) > check:
+                    area_room_idx += 1
+                    room_slices.append(room_slices[-1]+num_slice)
+
+        train_data, train_block_slices, train_room_slices = self.collate(train_list, train_room_slices)
+        test_data, test_block_slices, test_room_slices = self.collate(test_list, test_room_slices)
+
+        # torch.save((train_data, (train_block_slices, train_room_slices)), self.processed_paths[0])
+        # torch.save((test_data, (test_block_slices, test_room_slices)), self.processed_paths[1])
+
+        print("Finished creating dataset ({} and {})".format(self.processed_paths[0], self.processed_paths[1]))
+
+
+class S3DIS1x1InsDataset(BaseDataset):
+    """Create 1m x 1m block datasets with instance labels from room data of S3DIS.
+    """
+    def __init__(self, dataset_opt):
+        super().__init__(dataset_opt)
+
+        self.train_dataset = S3DIS1x1Ins(
+            self._data_path,
+            test_area=self.dataset_opt.fold,
+            train=True,
+            transform=self.train_transform,
+        )
+        self.test_dataset = S3DIS1x1Ins(
+            self._data_path,
+            test_area=self.dataset_opt.fold,
+            train=False,
+            transform=self.train_transform,
+        )
+
+        if dataset_opt.class_weight_method:
+            self.add_weights(class_weight_method=dataset_opt.class_weight_method)
+
+    def get_tracker(self, wandb_log: bool, tensorboard_log: bool):
+        """Factory method for the tracker
+
+        Arguments:
+            wandb_log - Log using weight and biases
+            tensorboard_log - Log using tensorboard
+        Returns:
+            [BaseTracker] -- tracker
+        """
+        from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
+
+        return SegmentationTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
+
+class S3DIS1x1Ins2(S3DISOriginalFused):
     r"""Create 1m x 1m block datasets with instance labels from room data of S3DIS.
     
     The (pre-processed) Stanford Large-Scale 3D Indoor Spaces dataset from
@@ -1088,7 +1320,7 @@ class S3DIS1x1Ins(S3DISOriginalFused):
         self._save_data(train_data_list, val_data_list, test_data_list, trainval_data_list)
 
 
-class S3DIS1x1InsDataset(BaseDataset):
+class S3DIS1x1InsDataset2(BaseDataset):
     """Create 1m x 1m block datasets with instance labels from room data of S3DIS.
     """
     def __init__(self, dataset_opt):
@@ -1100,7 +1332,7 @@ class S3DIS1x1InsDataset(BaseDataset):
         #   False: split train and val
         use_trainval_data:bool = dataset_opt.use_trainval_data
         if use_trainval_data:
-            self.train_dataset = S3DIS1x1Ins(
+            self.train_dataset = S3DIS1x1Ins2(
                 self._data_path,
                 test_area=self.dataset_opt.fold,
                 split="trainval",
@@ -1109,7 +1341,7 @@ class S3DIS1x1InsDataset(BaseDataset):
                 keep_instance=True
             )
         else:
-            self.train_dataset = S3DIS1x1Ins(
+            self.train_dataset = S3DIS1x1Ins2(
                 self._data_path,
                 test_area=self.dataset_opt.fold,
                 split="train",
@@ -1117,7 +1349,7 @@ class S3DIS1x1InsDataset(BaseDataset):
                 transform=self.train_transform,
                 keep_instance=True
             )
-            self.val_dataset = S3DIS1x1Ins(
+            self.val_dataset = S3DIS1x1Ins2(
                 self._data_path,
                 test_area=self.dataset_opt.fold,
                 split="val",
@@ -1126,7 +1358,7 @@ class S3DIS1x1InsDataset(BaseDataset):
                 keep_instance=True
             )
 
-        self.test_dataset = S3DIS1x1Ins(
+        self.test_dataset = S3DIS1x1Ins2(
             self._data_path,
             test_area=self.dataset_opt.fold,
             split="test",

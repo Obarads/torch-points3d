@@ -45,6 +45,7 @@ class SimpleBatch(Data):
                 or isinstance(item, int)
                 or isinstance(item, float)
             ):
+                print('a')
                 batch[key] = torch.stack(batch[key])
             else:
                 raise ValueError("Unsupported attribute type")

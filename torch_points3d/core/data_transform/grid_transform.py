@@ -7,11 +7,13 @@ import re
 import torch
 import logging
 import torch.nn.functional as F
+from torch_geometric.data.batch import Batch
 from torch_scatter import scatter_mean, scatter_add
 from torch_geometric.nn.pool.consecutive import consecutive_cluster
 from torch_geometric.nn import voxel_grid
 from torch_geometric.data import Data
 from torch_cluster import grid_cluster
+
 
 log = logging.getLogger(__name__)
 
@@ -235,7 +237,8 @@ class BlockSampling(object):
     block sampling for BlockMargining
     """
 
-    def __init__(self, num_point, block_size=1.0, stride=1.0, mode="mean", verbose=False):
+    def __init__(self, num_point, block_size=1.0, stride=0.5, mode="mean", verbose=False):
+        self._num_point = num_point
         self._block_size = block_size
         self._stride = stride
         self._mode = mode
@@ -249,23 +252,44 @@ class BlockSampling(object):
                     "The tensors within data will be shuffled each time this transform is applied. Be careful that if an attribute doesn't have the size of num_points, it won't be shuffled"
                 )
 
-    def _process(self, data):
-        if self._mode == "last":
-            data = shuffle_data(data)
+    def _process(self, data_list):
+        # if self._mode == "last":
+        #     data = shuffle_data(data)
 
-        coords = torch.round((data.pos) / self._grid_size)
-        if "batch" not in data:
-            cluster = grid_cluster(coords, torch.tensor([1, 1, 1]))
-        else:
-            cluster = voxel_grid(coords, data.batch, 1)
-        cluster, unique_pos_indices = consecutive_cluster(cluster)
+        # coords = torch.round((data.pos) / self._grid_size)
+        # if "batch" not in data:
+        #     cluster = grid_cluster(coords, torch.tensor([1, 1, 1]))
+        # else:
+        #     cluster = voxel_grid(coords, data.batch, 1)
+        # cluster, unique_pos_indices = consecutive_cluster(cluster)
 
-        data = group_data(data, cluster, unique_pos_indices, mode=self._mode)
-        if self._quantize_coords:
-            data.coords = coords[unique_pos_indices].int()
+        # data = group_data(data, cluster, unique_pos_indices, mode=self._mode)
+        # if self._quantize_coords:
+        #     data.coords = coords[unique_pos_indices].int()
 
-        data.grid_size = torch.tensor([self._grid_size])
-        return data
+        # data.grid_size = torch.tensor([self._grid_size])
+        block_list = []
+        for data in data_list:  # data = one room
+            xyz = data.x
+            rgb = data.rgb
+            semantic_labels = data.y
+            instance_labels = data.instance_labels
+
+            xyz_min = torch.min(xyz, dim=0)[0]
+            modified_xyz = xyz - xyz_min
+
+            # Split single room data into blocks.
+            points, sem_labels, ins_labels = room2blocks_plus_normalized(
+                t2n(torch.cat([modified_xyz, rgb], dim=1)), 
+                t2n(semantic_labels), t2n(instance_labels), self._num_points, 
+                block_size=self._block_size, stride=self._stride
+            )
+            # From numpy to torch
+            points = torch.from_numpy(points).to(torch.float32)
+            sem_labels = torch.from_numpy(sem_labels).to(torch.long)
+            ins_labels = torch.from_numpy(ins_labels).to(torch.long)
+            block_list.append([points, sem_labels, ins_labels])
+        return block_list
 
     def __call__(self, data):
         if isinstance(data, list):
@@ -279,6 +303,20 @@ class BlockSampling(object):
             self.__class__.__name__, self._grid_size, self._quantize_coords, self._mode
         )
 
+def t2n(tensor):
+    """Convert torch.tensor to numpy.ndarray.
+
+    Parameters
+    ----------
+    tensor : torch.tensor
+        torch.tensor you want to convert to numpy.array.
+
+    Returns
+    -------
+    array : numpy.ndarray
+        numpy.ndarray converted
+    """
+    return tensor.cpu().detach().numpy()
 
 def sample_data_label(data, label, inslabel, num_sample):
     new_data, sample_indices = sample_data(data, num_sample)

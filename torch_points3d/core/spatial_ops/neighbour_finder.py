@@ -70,22 +70,21 @@ class DenseKNNNeighbourFinder(BaseNeighbourFinder):
         return self.find_neighbours(x, y)
 
     def find_neighbours(self, x, y):
-        # B, N, C = x.shape
-        with torch.no_grad():
-            # (B, N, C) -> (B*N, C) and (B*N)
-            # (B*N) = batch index tensor
-            sparse_x, batch_x = self.dense_to_sparse(x)
-            sparse_y, batch_y = self.dense_to_sparse(y)
+        B, N, C = x.shape
+        # (B, N, C) -> (B*N, C) and (B*N)
+        # (B*N) = batch index tensor
+        sparse_x, batch_x = self.dense_to_sparse(x)
+        sparse_y, batch_y = self.dense_to_sparse(y)
 
-            # calc. kNN
-            _, sparse_knn_indices = knn(row_x, row_y, self.k, batch_x, batch_y)
+        # calc. kNN
+        _, sparse_knn_indices = knn(sparse_x, sparse_y, self.k, batch_x, batch_y)
 
-            # convert kNN index tensor from Sparse to Dense.
-            knn_indices = sparse_knn_indices.view(B, N, self.k)
-            sub_knn_indices = torch.arange(0, B, device=knn_indices.device) \
-                .view(-1, *[1]*(len(knn_indices.shape)-1)) * N
-            # if len(idx_shape) = 3, .view(-1, 1, 1)
-            dense_knn_indices = knn_indices - sub_knn_indices
+        # convert kNN index tensor from Sparse to Dense.
+        knn_indices = sparse_knn_indices.view(B, N, self.k)
+        sub_knn_indices = torch.arange(0, B, device=knn_indices.device) \
+            .view(-1, *[1]*(len(knn_indices.shape)-1)) * N
+        # if len(idx_shape) = 3, .view(-1, 1, 1)
+        dense_knn_indices = knn_indices - sub_knn_indices
 
         return dense_knn_indices
 

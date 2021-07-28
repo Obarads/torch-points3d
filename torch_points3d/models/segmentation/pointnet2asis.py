@@ -12,6 +12,7 @@ from torch_geometric.data import Data
 # from torch_points3d.models.base_architectures.unet import UnwrappedUnetBasedModel
 from torch_points3d.models.base_architectures import UnetBasedModel
 from torch_points3d.datasets.segmentation import IGNORE_LABEL
+from torch_points3d.datasets.batch import SimpleBatch
 
 # from .structures import PanopticLabels, PanopticResults
 from torch_points3d.modules.ASIS import *
@@ -19,7 +20,6 @@ from torch_points3d.modules.pointnet2 import *
 from torch_points3d.core.losses import DiscriminativeLoss
 
 log = logging.getLogger(__name__)
-
 
 class PointNet2ASIS(UnetBasedModel):
     def __init__(self, option, model_type, dataset, modules):
@@ -79,7 +79,7 @@ class PointNet2ASIS(UnetBasedModel):
         self.visual_names = ["data_visual"]
         # self.init_weights()
 
-    def set_input(self, data, device):
+    def set_input(self, data: SimpleBatch, device: torch.device):
         """
         Parameters
         ----------
@@ -95,29 +95,19 @@ class PointNet2ASIS(UnetBasedModel):
         device:
             Device info.
         """
-        data = data.to(device)
-
         # pos and features
         assert len(data.pos.shape) == 3
         if data.x is not None:
-            x = data.x.transpose(1, 2).contiguous()
+            x = data.x.transpose(1, 2).contiguous().to(torch.float32)
         else:
             x = None
-        self.input = Data(x=x, pos=data.pos)
+        self.input = Data(x=x, pos=data.pos.to(torch.float32)).to(device)
 
         # sem labels
-        if data.y is not None:
-            self.gt_sem_labels = data.y  # [B * N]
-        else:
-            self.gt_sem_labels = None
+        self.gt_sem_labels: torch.tensor = data.y.to(device)
 
         # ins labels
-        if data.instance_labels is not None:
-            self.gt_ins_labels = data.instance_labels
-        else:
-            self.gt_ins_labels = None
-
-        data = data.to(device)
+        self.gt_ins_labels: torch.tensor = data.ins_y.to(device)
 
         # self.batch_idx = torch.arange(0, data.pos.shape[0]).view(-1, 1).repeat(1, data.pos.shape[1]).view(-1)
         if self._use_category:
@@ -133,7 +123,7 @@ class PointNet2ASIS(UnetBasedModel):
         ins_data = self.ins_layer(ins_data.x)
         self.pred_sem, self.embed_ins = self.asis(sem_data, ins_data)
 
-        if self.training():
+        if not self.model.training:
             with torch.no_grad():
                 # self._dump_visuals(epoch)
                 num_clusters, labels, cluster_centers = self._cluster(self.embed_ins)

@@ -139,7 +139,7 @@ class Trainer:
         for epoch in range(self._checkpoint.start_epoch, self._cfg.training.epochs):
             log.info("EPOCH %i / %i", epoch, self._cfg.training.epochs)
 
-            self._train_epoch(epoch)
+            # self._train_epoch(epoch)
 
             if self.profiling:
                 return 0
