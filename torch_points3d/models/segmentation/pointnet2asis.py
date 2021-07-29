@@ -21,6 +21,45 @@ from torch_points3d.core.losses import DiscriminativeLoss
 
 log = logging.getLogger(__name__)
 
+def BlockMerging(volume, volume_seg, pts, grouplabel, groupseg, gap=1e-3):
+
+    overlapgroupcounts = np.zeros([100,300])
+    groupcounts = np.ones(100)
+    x=(pts[:,0]/gap).astype(np.int32)
+    y=(pts[:,1]/gap).astype(np.int32)
+    z=(pts[:,2]/gap).astype(np.int32)
+    for i in range(pts.shape[0]):
+        xx=x[i]
+        yy=y[i]
+        zz=z[i]
+        if grouplabel[i] != -1:
+            if volume[xx,yy,zz]!=-1 and volume_seg[xx,yy,zz]==groupseg[grouplabel[i]]:
+                #overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
+                try:
+                    overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
+                except:
+                    pass
+        groupcounts[grouplabel[i]] += 1
+
+    groupcate = np.argmax(overlapgroupcounts,axis=1)
+    maxoverlapgroupcounts = np.max(overlapgroupcounts,axis=1)
+
+    curr_max = np.max(volume)
+    for i in range(groupcate.shape[0]):
+        if maxoverlapgroupcounts[i]<7 and groupcounts[i]>30:
+            curr_max += 1
+            groupcate[i] = curr_max
+
+
+    finalgrouplabel = -1 * np.ones(pts.shape[0])
+
+    for i in range(pts.shape[0]):
+        if grouplabel[i] != -1 and volume[x[i],y[i],z[i]]==-1:
+            volume[x[i],y[i],z[i]] = groupcate[grouplabel[i]]
+            volume_seg[x[i],y[i],z[i]] = groupseg[grouplabel[i]]
+            finalgrouplabel[i] = groupcate[grouplabel[i]]
+    return finalgrouplabel
+
 class PointNet2ASIS(UnetBasedModel):
     def __init__(self, option, model_type, dataset, modules):
         UnetBasedModel.__init__(self, option, model_type, dataset, modules)
@@ -126,8 +165,21 @@ class PointNet2ASIS(UnetBasedModel):
         if not self.model.training:
             with torch.no_grad():
                 # self._dump_visuals(epoch)
-                num_clusters, labels, cluster_centers = self._cluster(self.embed_ins)
+                pass
+                # num_clusters, labels, cluster_centers = self._cluster(self.embed_ins)
 
+            # for idx_cluster in range(num_clusters):
+            #     tmp = (block_pred_ins_label == idx_cluster)
+            #     if np.sum(tmp) != 0: # add (for a cluster of zero element.)
+            #         a = stats.mode(block_pred_sem_label[tmp])[0]
+            #         estimated_seg = int(a)
+            #         ins_seg[idx_cluster] = estimated_seg
+
+            # # I should change this value name
+            # merged_block_pred_ins_label = BlockMerging(volume, volume_seg, 
+            #                                            block_point_cloud[:, 6:],
+            #                                            block_pred_ins_label, 
+            #                                            ins_seg, gap)
         self.output = self.pred_sem.transpose(1,2) # (B, C, N) -> (B, N, C) for Tracker
         self.labels = self.gt_sem_labels
 
