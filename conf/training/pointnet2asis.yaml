@@ -1,9 +1,4 @@
-# Training params for PointNet++ (PointNet2) with ASIS module.
-# Note: the paper author use Stanford3dDataset_v1.2_Aligned_Version in implementation environment so data size differ from Stanford3dDataset_v1.2_Version. Specifically, when batch size = 16, number of iterations is 1046 in case of Stanford3dDataset_v1.2_Aligned_Version, and is 1052 in case of Stanford3dDataset_v1.2_Version.
-# ideal: batch_size = 24 cannot work in my env (single RTX2080ti).
-
-# Those arguments defines the training hyper-parameters
-# @package training
+# @package _global_
 epochs: 100
 num_workers: 8
 batch_size: 24
@@ -12,7 +7,6 @@ cuda: 0 # -1 -> no cuda otherwise takes the specified index
 precompute_multi_scale: False # Compute multiscate features on cpu for faster training / inference
 optim:
     base_lr: 0.001
-    # accumulated_gradient: -1 # Accumulate gradient accumulated_gradient * batch_size
     grad_clip: -1
     optimizer:
         class: Adam
@@ -23,19 +17,10 @@ optim:
         params:
             gamma: 0.5
             step_size: 20
-    # bn_scheduler: # ?
-    #     bn_policy: "step_decay"
-    #     params:
-    #         bn_momentum: 0.1
-    #         bn_decay: 0.9
-    #         decay_step : 10
-    #         bn_clip : 1e-2
 weight_name: "latest" # Used during resume, select with model to load from [miou, macc, acc..., latest]
 enable_cudnn: True
 checkpoint_dir: ""
 
-# Those arguments within experiment defines which model, dataset and task to be created for benchmarking
-# parameters for Weights and Biases
 wandb:
     entity: ""
     project: default
@@ -46,7 +31,6 @@ wandb:
     config:
         model_name: ${model_name}
 
-    # parameters for TensorBoard Visualization
 tensorboard:
     log: True
 

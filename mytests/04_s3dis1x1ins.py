@@ -11,7 +11,8 @@ from torch_points3d.datasets.segmentation.s3dis import S3DIS1x1Ins
 import k3d
 
 # paths
-tg_dataset_path = "/home/coder/workspace/data2/torch_point3d/s3dis1x1ins"
+# tg_dataset_path = "/home/coder/workspace/data2/torch_point3d/s3dis1x1ins"
+tg_dataset_path = "./data"
 # data_config_path = '/home/coder/workspace/code/myrepo/torch-points3d/conf/data/segmentation/s3disfused.yaml'
 # config_path = '/home/coder/workspace/code/myrepo/torch-points3d/conf/config.yaml'
 output_path = 'output/'

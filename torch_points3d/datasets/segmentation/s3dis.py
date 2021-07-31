@@ -985,7 +985,6 @@ class S3DIS1x1Ins(InMemoryDataset):
 
         new_room_slices = {}
         for key in block_slices:
-            print(key)
             new_room_slices[key] = torch.tensor(room_slices)
 
         return data, block_slices, new_room_slices
@@ -1080,8 +1079,8 @@ class S3DIS1x1Ins(InMemoryDataset):
         train_data, train_block_slices, train_room_slices = self.collate(train_list, train_room_slices)
         test_data, test_block_slices, test_room_slices = self.collate(test_list, test_room_slices)
 
-        # torch.save((train_data, (train_block_slices, train_room_slices)), self.processed_paths[0])
-        # torch.save((test_data, (test_block_slices, test_room_slices)), self.processed_paths[1])
+        torch.save((train_data, (train_block_slices, train_room_slices)), self.processed_paths[0])
+        torch.save((test_data, (test_block_slices, test_room_slices)), self.processed_paths[1])
 
         print("Finished creating dataset ({} and {})".format(self.processed_paths[0], self.processed_paths[1]))
 
