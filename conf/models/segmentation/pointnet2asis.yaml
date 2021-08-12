@@ -34,6 +34,8 @@ PointNet2ASIS_PAPER:
         ins_output_dim: 5
         # dropout: 0.5
         k: 30
+    block_merging:
+        gap: 0.005
     loss:
         cross_entropy_loss: # semantic loss
             loss_weights: 1.0

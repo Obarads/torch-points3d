@@ -8,9 +8,10 @@ use_category: False
 structure:
   train: block
   test: block
-# train_transforms:
-#     - transform: FixedPoints
-#       lparams: [4096]
-# test_transform:
-#     - transform: FixedPoints
-#       lparams: [4096]
+mean_num_pts_in_group: [56250, 74075, 9912, 10637, 5930, 6265, 7580, 7741, 3539, 7618, 6182, 4997, 2586]
+train_transforms:
+    - transform: FixedPoints
+      lparams: [4096]
+test_transform:
+    - transform: FixedPoints
+      lparams: [4096]

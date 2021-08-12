@@ -82,7 +82,6 @@ class PointNet2ASIS(UnwrappedUnetBasedModel):
 
     def forward(self, epoch=-1, *args, **kwargs):
         data = self.model(self.input)
-        print(data.shape)
         sem_data, ins_data = data
 
         # Use ASIS.

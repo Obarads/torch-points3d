@@ -1091,6 +1091,8 @@ class S3DIS1x1InsDataset(BaseDataset):
     def __init__(self, dataset_opt):
         super().__init__(dataset_opt)
 
+        self.mean_num_pts_in_group = dataset_opt.mean_num_pts_in_group
+
         self.train_dataset = S3DIS1x1Ins(
             self._data_path,
             test_area=self.dataset_opt.fold,
