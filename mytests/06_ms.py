@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numpy import set_printoptions
 from typing import Tuple
+import time
+from numpy.lib.shape_base import tile
 set_printoptions(threshold=1000000000)
 
 def get_cmap(n, name='hsv'):
@@ -12,7 +14,7 @@ def get_cmap(n, name='hsv'):
     return plt.cm.get_cmap(name, n)
 
 def plot_data(centroids, data, pred_centers, n_samples, label, pattern):
-    max_label = np.max(label+1)
+    max_label = np.max(label) + 2
     camp = get_cmap(max_label)
     colors_arr = []
     for i in range(len(label)):
@@ -20,7 +22,7 @@ def plot_data(centroids, data, pred_centers, n_samples, label, pattern):
     plt.scatter(data[:,0], data[:,1], color=colors_arr)
     plt.savefig('data_{}.png'.format(pattern))
     plt.show()
-    colour = plt.cm.rainbow(np.linspace(0,1,len(centroids)))
+    # colour = plt.cm.rainbow(np.linspace(0,1,len(centroids)))
     for i, centroid in enumerate(centroids):
         # samples = X[i*n_samples:(i+1)*n_samples]
         # plt.scatter(samples[:,0], samples[:,1], c=colour[i], s=1)
@@ -33,19 +35,34 @@ def plot_data(centroids, data, pred_centers, n_samples, label, pattern):
     plt.clf()
 
 import torch
-class MeanShiftG:
+def gaussian(d:torch.FloatTensor, bw:float) -> torch.FloatTensor:
+    return torch.exp(-0.5*((d/bw))**2) / (bw*math.sqrt(2*math.pi))
+
+def flat(d:torch.FloatTensor, bw:float) -> torch.FloatTensor:
+    res: torch.BoolTensor = d < bw
+    return res.to(dtype=d.dtype)
+
+class TorchMeanShift:
     """https://github.com/fastai/courses/blob/master/deeplearning2/meanshift.ipynb
     """
-    def __init__(self, bandwidth, max_iter=300) -> None:
+
+    supported_kernels = {
+        'gaussian': gaussian,
+        'flat': flat
+    }
+
+    def __init__(self, bandwidth, max_iter=300, kernel='flat') -> None:
         self.bandwidth = bandwidth
-        self.labels_ = None
         self.max_iter = max_iter
+
+        if kernel in self.supported_kernels:
+            self.kernel = self.supported_kernels[kernel]
+        else:
+            raise NotImplementedError('Supported kernels are {}, actually {}'.format(self.supported_kernels.keys(), kernel))
+
+        self.labels_ = None
         self.cluster_all = True
         self.n_iter_ = 0
-
-    @staticmethod
-    def _gaussian(d, bw) -> torch.FloatTensor:
-        return torch.exp(-0.5*((d/bw))**2) / (bw*math.sqrt(2*math.pi))
 
     @staticmethod
     def _get_pairwise_distances(a,b) -> torch.FloatTensor:
@@ -68,7 +85,7 @@ class MeanShiftG:
             X = torch.arange(12, dtype=torch.float32).reshape(4,3)
             mask = MeanshiftG._get_radius_nn_mask(X, X, 5)
         """
-        dist = MeanShiftG._get_pairwise_distances(X1, X2)
+        dist = TorchMeanShift._get_pairwise_distances(X1, X2)
         radius_nn_mask:torch.tensor = dist < radius
 
         # If X1.shape=X2.shape and including_myself is True, this function does not include myself in raidus NN for the mean calculation.
@@ -93,12 +110,12 @@ class MeanShiftG:
 
         Examples:
             X = torch.arange(12, dtype=torch.float32).reshape(4,3)
-            tms = MeanShiftG(5, max_iter=5)
+            tms = TorchMeanShift(5, max_iter=5)
             mean_data, mask = tms._mean_radius_nn(X)
         """
 
         # Get radius NN mask
-        radius_nn_mask = MeanShiftG._get_radius_nn_mask(X, X, radius, including_myself)
+        radius_nn_mask = TorchMeanShift._get_radius_nn_mask(X, X, radius, including_myself)
 
         # Get radius NN mean (including myself)
         N, C = X.shape
@@ -126,7 +143,7 @@ class MeanShiftG:
         seeds = original_X
         center_intensity_dict = {}
         for i in range(len(seeds)):
-            if all_res[i][1] > 1:  # i.e. len(points_within) > 0
+            if all_res[i][1]:  # i.e. len(points_within) > 0
                 center_intensity_dict[all_res[i][0]] = all_res[i][1]
 
         sorted_by_intensity = sorted(center_intensity_dict.items(),
@@ -134,7 +151,7 @@ class MeanShiftG:
                                      reverse=True)
         sorted_centers = torch.tensor([tup[0] for tup in sorted_by_intensity], device=device)
 
-        radius_nn_mask = MeanShiftG._get_radius_nn_mask(sorted_centers, sorted_centers, self.bandwidth)
+        radius_nn_mask = TorchMeanShift._get_radius_nn_mask(sorted_centers, sorted_centers, self.bandwidth)
         unique = torch.ones(len(sorted_centers), dtype=bool, device=device)
 
         for i in range(len(sorted_centers)):
@@ -157,31 +174,34 @@ class MeanShiftG:
             # bool_selector = dist.flatten() <= self.bandwidth
             # labels[bool_selector] = idxs.flatten()[bool_selector]
 
-        self.cluster_centers_ = MeanShiftG._t2n(cluster_centers)
-        self.labels_ = MeanShiftG._t2n(labels)
+        self.cluster_centers_ = TorchMeanShift._t2n(cluster_centers)
+        self.labels_ = TorchMeanShift._t2n(labels)
 
     def fit(self, X:torch.FloatTensor):
         original_X = deepcopy(X)
         stop_thresh = 1e-3 * self.bandwidth
-        
+
         with torch.no_grad():
             # X = torch.FloatTensor(np.copy(X)).cuda()
+            start = time.time()
             for it in range(self.max_iter):
-                weight = self._gaussian(self._get_pairwise_distances(X, X), self.bandwidth)
+                weight = self.kernel(self._get_pairwise_distances(X, X), self.bandwidth)
                 num = (weight[:, :, None] * X).sum(1)
                 X_new = num / weight.sum(1)[:, None]
-
                 # check convergence
                 shift = torch.abs(X_new - X).sum()/torch.abs(original_X.sum())
                 X = X_new
                 self.n_iter_ += 1
                 if shift < stop_thresh:
                     break
-
+            print(time.time()-start)
+            start = time.time()
             self._create_labels(X, original_X)
+            print(time.time()-start)
 
     def predict(self):
         raise NotImplementedError()
+
 
 n_clusters=6
 n_samples =250
@@ -190,7 +210,7 @@ slices = [np.random.multivariate_normal(centroids[i], np.diag([5., 5.]), n_sampl
            for i in range(n_clusters)]
 data = np.concatenate(slices).astype(np.float32)
 
-tms = MeanShiftG(1, max_iter=500)
+tms = TorchMeanShift(4, max_iter=500, kernel='flat')
 tms.fit(torch.from_numpy(data).to(0))
 labels = tms.labels_
 centers = tms.cluster_centers_
@@ -198,7 +218,7 @@ print('gpu iter: {}'.format(tms.n_iter_))
 plot_data(centroids, data, centers, n_samples, labels, 'gpu')
 
 from sklearn.cluster import MeanShift
-ms = MeanShift(bandwidth=2)
+ms = MeanShift(bandwidth=4)
 ms.fit(data)
 labels = ms.labels_
 centers = ms.cluster_centers_
