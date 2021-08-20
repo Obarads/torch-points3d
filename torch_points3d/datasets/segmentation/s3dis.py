@@ -12,7 +12,7 @@ import random
 import glob
 from plyfile import PlyData, PlyElement
 import torch_geometric
-from torch_geometric.data import InMemoryDataset, Data, extract_zip, Dataset
+from torch_geometric.data import InMemoryDataset, Data, data, extract_zip, Dataset
 from torch_geometric.data.dataset import files_exist
 from torch_geometric.data import DataLoader
 from torch_geometric.datasets import S3DIS as S3DIS1x1
@@ -919,26 +919,20 @@ class S3DIS1x1Ins(InMemoryDataset):
                  root,
                  test_area=6,
                  train=True,
-                 structure={'train': 'block', 'test': 'room'},
+                 slice_type='room',
                  transform=None,
                  pre_transform=None,
                  pre_filter=None):
         assert test_area >= 1 and test_area <= 6
         self.test_area = test_area
-        assert structure['train'] in self.valid_slice_types
-        assert structure['test'] in self.valid_slice_types
-        self.structure = structure
+        assert slice_type in self.valid_slice_types
+        self.slice_type = slice_type
 
         super().__init__(root, transform, pre_transform, pre_filter)
         path = self.processed_paths[0] if train else self.processed_paths[1]
 
         self.data, slices = torch.load(path)
         block_slices, room_slices = slices
-        if train:
-            slice_type = self.structure['train']
-        else:
-            slice_type = self.structure['test']
-
         if slice_type == 'block':
             self.slices = block_slices
         elif slice_type == 'room':
@@ -1092,22 +1086,24 @@ class S3DIS1x1InsDataset(BaseDataset):
         super().__init__(dataset_opt)
 
         self.mean_num_pts_in_group = dataset_opt.mean_num_pts_in_group
+        self.gap = dataset_opt.gap
 
         self.train_dataset = S3DIS1x1Ins(
             self._data_path,
             test_area=self.dataset_opt.fold,
             train=True,
-            structure=self.dataset_opt.structure,
+            slice_type='block',
             transform=self.train_transform,
         )
+
         self.test_dataset = S3DIS1x1Ins(
             self._data_path,
             test_area=self.dataset_opt.fold,
             train=False,
-            structure=self.dataset_opt.structure,
+            slice_type='block',
             transform=self.train_transform,
         )
-
+ 
         if dataset_opt.class_weight_method:
             self.add_weights(class_weight_method=dataset_opt.class_weight_method)
 
@@ -1120,6 +1116,7 @@ class S3DIS1x1InsDataset(BaseDataset):
         Returns:
             [BaseTracker] -- tracker
         """
-        from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
-
-        return SegmentationTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
+        # from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
+        # return SegmentationTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
+        from torch_points3d.metrics.s3dis_tracker import BlockMergingTracker
+        return BlockMergingTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)

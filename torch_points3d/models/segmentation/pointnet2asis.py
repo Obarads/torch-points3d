@@ -2,9 +2,14 @@ import logging
 import random
 import os
 import re
+
+from numpy.core.fromnumeric import mean
+from numpy.core.shape_base import block
+from torch_points3d.core.data_transform.grid_transform import BlockSampling
 from sklearn.cluster import MeanShift
 from scipy import stats
-from typing import List
+from typing import List, Dict
+import math
 
 import torch
 from torch import nn
@@ -13,132 +18,101 @@ from torch.nn import functional as F
 
 from torch_geometric.data import Data
 
-# from torch_points3d.models.base_architectures.unet import UnwrappedUnetBasedModel
 from torch_points3d.models.base_architectures import UnetBasedModel
 from torch_points3d.datasets.segmentation import IGNORE_LABEL
 from torch_points3d.datasets.batch import SimpleBatch
 
-# from .structures import PanopticLabels, PanopticResults
 from torch_points3d.modules.ASIS import *
 from torch_points3d.modules.pointnet2 import *
 from torch_points3d.core.losses import DiscriminativeLoss
 
 log = logging.getLogger(__name__)
 
-class BlcokMerging:
-    def __init__(self, num_classes:int, gap:float=5e-3, mean_num_pts_in_group:np.ndarray=None):
-        self.num_classes = num_classes
-        self.gap = gap
-        if mean_num_pts_in_group is None:
-            self.mean_num_pts_in_group = np.ones(self.num_classes, dtype=np.float32)
-        else:
-            self.mean_num_pts_in_group = mean_num_pts_in_group.astype(np.float32)
+# def sparse_to_dense_with_idx_list(data:Data, idx_list:torch.tensor):
+#     """convert sparse to dense data along index list. (In order to create block data from an area data)
+#     If assign 0 ~ B (index) to each data element, return a Data list with B length. The list have Data stacked according to assigned number (index).
+#     Args:
+#         data (Data): sparse data (N, C)
+#         idx_list (torch.tensor): index list (N)
+#     Return:
+#         data_list: dense data (B, ...)
+#     """
+#     ids = torch.unique(idx_list, dtype=torch.long)
+#     dense = []
+#     for id in ids:
+#         data_idx = idx_list  == id
+#         dense.append(Data[data_idx])
+#     return dense
 
-        self.init_data()
-    
-    def init_data(self):
-        volume_num = int(1. / self.gap)+1
-        self.volume = -1* np.ones([volume_num,volume_num,volume_num]).astype(np.int32)
-        self.volume_seg = -1* np.ones([volume_num,volume_num,volume_num]).astype(np.int32)
-
-        self.ins_output = []
-        self.sem_output = []
-        self.points = []
-
-    def append_block(self, block_points:np.ndarray, sem_output:np.ndarray, ins_output:np.ndarray, ins_seg:dict):
-        """
-        Args:
-            block_points (np.ndarray): xyz points (N, C)
-            sem_output (np.ndarray): semantic segmentation output (N)
-            ins_output (np.ndarray): instance segmentation output (N)
-            ins_seg (dict)
-        """
-        merged_ins_output = self._block_merging(self.volume, self.volume_seg, block_points, ins_output, ins_seg, self.gap)
-        self.ins_output.append(merged_ins_output)
-        self.sem_output.append(sem_output)
-        self.points.append(block_points)
-
-    @staticmethod
-    def _block_merging(volume, volume_seg, pts, grouplabel, groupseg, gap=1e-3):
-        overlapgroupcounts = np.zeros([100,300])
-        groupcounts = np.ones(100)
-        x=(pts[:,0]/gap).astype(np.int32)
-        y=(pts[:,1]/gap).astype(np.int32)
-        z=(pts[:,2]/gap).astype(np.int32)
-        for i in range(pts.shape[0]):
-            xx=x[i]
-            yy=y[i]
-            zz=z[i]
-            if grouplabel[i] != -1:
-                if volume[xx,yy,zz]!=-1 and volume_seg[xx,yy,zz]==groupseg[grouplabel[i]]:
-                    #overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
-                    try:
-                        overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
-                    except:
-                        pass
-            groupcounts[grouplabel[i]] += 1
-
-        groupcate = np.argmax(overlapgroupcounts,axis=1)
-        maxoverlapgroupcounts = np.max(overlapgroupcounts,axis=1)
-
-        curr_max = np.max(volume)
-        for i in range(groupcate.shape[0]):
-            if maxoverlapgroupcounts[i]<7 and groupcounts[i]>30:
-                curr_max += 1
-                groupcate[i] = curr_max
-
-        finalgrouplabel = -1 * np.ones(pts.shape[0])
-
-        for i in range(pts.shape[0]):
-            if grouplabel[i] != -1 and volume[x[i],y[i],z[i]]==-1:
-                volume[x[i],y[i],z[i]] = groupcate[grouplabel[i]]
-                volume_seg[x[i],y[i],z[i]] = groupseg[grouplabel[i]]
-                finalgrouplabel[i] = groupcate[grouplabel[i]]
-        return finalgrouplabel
-
-    def get_result(self) -> np.ndarray:
-        scene_pc = self.points.reshape([-1, self.points.shape[-1]])
-        scene_ins_label = self.ins_output.reshape(-1)
-        volume = self.volume
-        x = (scene_pc[:, 6] / self.gap).astype(np.int32)
-        y = (scene_pc[:, 7] / self.gap).astype(np.int32)
-        z = (scene_pc[:, 8] / self.gap).astype(np.int32)
-        for i in range(scene_ins_label.shape[0]):
-            if volume[x[i], y[i], z[i]] != -1:
-                scene_ins_label[i] = volume[x[i], y[i], z[i]]
-
-        un = np.unique(scene_ins_label)
-        pts_in_pred = [[] for itmp in range(self.num_classes)]
-        group_pred_final:np.ndarray = -1 * np.ones_like(scene_ins_label)
-        grouppred_cnt = 0
-        for ig, g in enumerate(un): #each object in prediction
-            if g == -1:
-                continue
-            tmp = (scene_ins_label == g)
-            sem_seg_g = int(stats.mode(scene_ins_label[tmp])[0])
-            #if np.sum(tmp) > 500:
-            if np.sum(tmp) > 0.25 * self.mean_num_pts_in_group[sem_seg_g]:
-                group_pred_final[tmp] = grouppred_cnt
-                pts_in_pred[sem_seg_g] += [tmp]
-                grouppred_cnt += 1
-        
-        return group_pred_final.astype(np.int32), self.sem_output.astype(np.int32)
-
-def sparse_to_dense_with_idx_list(data:Data, idx_list:torch.tensor):
-    """convert sparse to dense data along index list. (In order to create block data from an area data)
-    If assign 0 ~ B (index) to each data element, return a Data list with B length. The list have Data stacked according to assigned number (index).
-    Args:
-        data (Data): sparse data (N, C)
-        idx_list (torch.tensor): index list (N)
-    Return:
-        data_list: dense data (B, ...)
+class MeanShiftG:
+    """https://github.com/fastai/courses/blob/master/deeplearning2/meanshift.ipynb
     """
-    ids = torch.unique(idx_list, dtype=torch.long)
-    dense = []
-    for id in ids:
-        data_idx = idx_list  == id
-        dense.append(Data[data_idx])
-    return dense
+    def __init__(self, bandwidth, max_iter=300) -> None:
+        self.bandwidth = bandwidth
+        self.label_ = None
+        self.max_iter = max_iter
+
+    def _gaussian(self, d, bw):
+        return torch.exp(-0.5*((d/bw))**2) / (bw*math.sqrt(2*math.pi))
+
+    def _dist_b(self, a,b):
+        return torch.sqrt(((a.unsqueeze(0) - b.unsqueeze(1))**2).sum(2))
+
+    def _create_labels(self, X, original_X):
+        # get all_res (sklearn)
+        dist = self._dist_b(X, X)
+        radius_nn_res = dist < (1e-3 * self.bandwidth)
+        num_nn = torch.sum(radius_nn_res, dim=1)
+        all_res = [(X[i], num_nn[i]) for i in range(len(X))]
+
+        seeds = original_X
+        center_intensity_dict = {}
+        for i in range(len(seeds)):
+            if all_res[i][1]:  # i.e. len(points_within) > 0
+                center_intensity_dict[all_res[i][0]] = all_res[i][1]
+
+        sorted_by_intensity = sorted(center_intensity_dict.items(),
+                                     key=lambda tup: (tup[1], tup[0]),
+                                     reverse=True)
+        sorted_centers = np.array([tup[0] for tup in sorted_by_intensity])
+
+        dist = self._dist_b(X, sorted_centers)
+        radius_nn_res = dist < self.bandwidth
+
+        unique = np.ones(len(sorted_centers), dtype=bool)
+        for i, center in enumerate(sorted_centers):
+            if unique[i]:
+                neighbor_idxs = radius_nn_res[i]
+                unique[neighbor_idxs] = 0
+                unique[i] = 1  # leave the current point as unique
+        cluster_centers = sorted_centers[unique]
+
+        # ASSIGN LABELS: a point belongs to the cluster that it is closest to
+        dist = self._dist_b(original_X, cluster_centers)
+        idxs = torch.argmin(dist, dim=1)
+        labels = torch.zeros(len(original_X), dtype=int)
+        if self.cluster_all:
+            labels = idxs.flatten()
+        else:
+            raise NotImplementedError()
+            # labels.fill(-1)
+            # bool_selector = dist.flatten() <= self.bandwidth
+            # labels[bool_selector] = idxs.flatten()[bool_selector]
+
+        self.cluster_centers_, self.labels_ = cluster_centers, labels
+
+    def fit(self, X):
+        original_X = X
+        with torch.no_grad():
+            X = torch.FloatTensor(np.copy(X)).cuda()
+            for it in range(self.max_iter):
+                weight = self._gaussian(self._dist_b(X, X), self.bandwidth)
+                num = (weight[:, :, None] * X).sum(1)
+                X = num / weight.sum(1)[:, None]
+        self._create_labels(X, original_X)
+
+    def predict(self):
+        raise NotImplementedError()
 
 class PointNet2ASIS(UnetBasedModel):
     def __init__(self, option, model_type, dataset, modules):
@@ -147,9 +121,7 @@ class PointNet2ASIS(UnetBasedModel):
         # Extract parameters from the dataset
         self._num_classes = dataset.num_classes
         self._weight_classes = dataset.weight_classes
-        self._mean_num_pts_in_group = dataset.mean_num_pts_in_group
         self._use_category = getattr(option, "use_category", False)
-        self._gap = option.block_merging.gap
         if self._use_category:
             if not dataset.class_to_segments:
                 raise ValueError(
@@ -217,7 +189,6 @@ class PointNet2ASIS(UnetBasedModel):
             Device info.
         """
 
-
         # pos and features
         assert len(data.pos.shape) == 3
         if data.x is not None:
@@ -227,48 +198,52 @@ class PointNet2ASIS(UnetBasedModel):
         self.input:Data = Data(x=x, pos=data.pos.to(torch.float32)).to(device)
 
         # sem labels
-        self.gt_sem_labels: torch.tensor = data.y.to(device)
+        self.labels: torch.tensor = data.y.to(device)
 
         # ins labels
-        self.gt_ins_labels: torch.tensor = data.ins_y.to(device)
+        self.ins_labels: torch.tensor = data.ins_y.to(device)
 
         # self.batch_idx = torch.arange(0, data.pos.shape[0]).view(-1, 1).repeat(1, data.pos.shape[1]).view(-1)
         if self._use_category:
             self.category = data.categor
+        
+        # Get room ID
+        if self.model.training:
+            self.room_id_list = data.area_room
 
     def forward(self, epoch=-1, *args, **kwargs):
-        if epoch == -1 and not self.model.training:  # for eval.py
-            assert len(self.input) == 1, 'Please set batch_size==1.'
-            block_idxs = self.input.block # Get block index per point.
-            block_inputs = sparse_to_dense_with_idx_list(self.input[0], block_idxs) # (N_A, C) -> (N_B, N, C), N_A=N_B * M
-            area_bm = BlcokMerging(self._num_classes, self._gap, self._mean_num_pts_in_group)
-            for block in block_inputs:
-                block = torch.unsqueeze(block, 0) # (N, C) -> (1, N, C), numpy to torch
-                pred_sem, embed_ins = self._network(block)
+        output, embed_ins = self._network(self.input)
+        self.output = output.transpose(1,2) # (B, NUM_CLASSES, N) -> (B, N, NUM_CLASSES) for Tracker
+        self.embed_ins = embed_ins # (B, ins_output_dim, N)
 
-                pred_sem = pred_sem.cpu().detach().numpy()[0] # (1, N, C) -> (N, C), torch to numpy
-                embed_ins = embed_ins.cpu().detach().numpy()[0] # (1, N, C) -> (N, C), torch to numpy
-                pred_sem_label = np.argmax(pred_sem, axis=1)
+        if not self.model.training:  # for eval.py
+            ins_output_labels = []
+            ins_seg_list = []
 
-                num_clusters, block_pred_ins_label, cluster_centers = \
-                    self.cluster(embed_ins, bandwidth=0.6)
+            sem_output_labels = torch.argmax(self.output, dim=-1) # Get prediction semantic labels (B, N, NUM_CLASSES) -> (B, N)
+            sem_output_labels = sem_output_labels.cpu().detach().numpy() # torch to numpy
+            embed_inses = self.embed_ins.cpu().detach().numpy() # torch to numpy
+
+            for block_idx in range(len(self.embed_ins)):
+                pred_sem_label = sem_output_labels[block_idx]
+                embed_ins = embed_inses[block_idx]
+
+                num_clusters, pred_ins_label, cluster_centers = \
+                    self._cluster(embed_ins)
+
                 ins_seg = {}
                 for idx_cluster in range(num_clusters):
-                    tmp = (block_pred_ins_label == idx_cluster)
+                    tmp = (pred_ins_label == idx_cluster)
                     if np.sum(tmp) != 0: # add (for a cluster of zero element.)
                         a = stats.mode(pred_sem_label[tmp])[0]
                         estimated_seg = int(a)
                         ins_seg[idx_cluster] = estimated_seg
-                area_bm.append_block(block, pred_sem, block_pred_ins_label, ins_seg)
-            ins_output, sem_output = area_bm.get_result()
-            self.ins_output = ins_output
-            self.ins_labels = self.gt_ins_labels
-            self.output = sem_output
-            self.labels = self.gt_sem_labels
-        else: # for train.py
-            self.pred_sem, self.embed_ins = self._network(self.input)
-            self.output = self.pred_sem.transpose(1,2) # (B, C, N) -> (B, N, C) for Tracker
-            self.labels = self.gt_sem_labels
+
+                ins_output_labels.append(pred_ins_label)
+                ins_seg_list.append(ins_seg)
+
+                self.ins_output_labels = ins_output_labels
+                self.ins_seg_list = ins_seg_list
 
         return self.output
 
@@ -282,14 +257,14 @@ class PointNet2ASIS(UnetBasedModel):
 
         return pred_sem, embed_ins
 
-    def get_ins_output(self):
-        return self.ins_output
-    
-    def get_ins_labels(self):
+    def get_output_for_BlockMerging(self):
+        return self.ins_output_labels, self.ins_seg_list, self.room_id_list
+
+    def get_labels_for_BlockMerging(self):
         return self.ins_labels
 
     def _cluster(self, embeddings):
-        ms = MeanShift(bandwidth=self.opt.bandwidth, bin_seeding=True)
+        ms = MeanShift(bandwidth=self.opt.cluster.andwidth, bin_seeding=True)
         ms.fit(embeddings)
         labels = ms.labels_
         cluster_centers = ms.cluster_centers_
@@ -298,19 +273,17 @@ class PointNet2ASIS(UnetBasedModel):
         return num_clusters, labels, cluster_centers
 
     def _compute_loss(self):
-        # Semantic loss
-        # self.semantic_loss = torch.nn.functional.nll_loss(
-        #     self.pred_sem, self.gt_sem_labels, ignore_index=IGNORE_LABEL
-        # )
-        self.semantic_loss = self.cross_entropy_loss(self.pred_sem, 
-                                                     self.gt_sem_labels)
+        self.semantic_loss = self.cross_entropy_loss(
+            self.output.transpose(1, 2),
+            self.labels
+        )
         self.loss = self.opt.loss.cross_entropy_loss.loss_weights * \
             self.semantic_loss
 
         # Instance loss
         self.instance_loss = self.discriminative_loss(
             self.embed_ins,
-            self.gt_ins_labels
+            self.ins_labels
         )
         self.loss += self.opt.loss.discriminative_loss.loss_weights * \
             self.instance_loss
