@@ -1,9 +1,11 @@
 from copy import deepcopy
 import math
+from os import tcgetpgrp
 import numpy as np
 import matplotlib.pyplot as plt
 from numpy import set_printoptions
 from typing import Tuple
+from numpy.core.defchararray import center
 from numpy.lib.shape_base import tile
 set_printoptions(threshold=1000000000)
 
@@ -59,8 +61,9 @@ class TorchMeanShift:
         'flat': flat
     }
 
-    def __init__(self, bandwidth, max_iter=300, kernel='flat') -> None:
+    def __init__(self, bandwidth, seeds:torch.FloatTensor=None, max_iter:int=300, kernel:str='flat') -> None:
         self.bandwidth = bandwidth
+        self.seeds = seeds
         self.max_iter = max_iter
 
         if kernel in self.supported_kernels:
@@ -68,9 +71,9 @@ class TorchMeanShift:
         else:
             raise NotImplementedError('Supported kernels are {}, actually {}'.format(self.supported_kernels.keys(), kernel))
 
-        self.labels_ = None
-        self.cluster_all = True
-        self.n_iter_ = 0
+        self.labels_:np.ndarray = None
+        self.cluster_all:bool = True
+        self.n_iter_:int = 0
 
     @staticmethod
     def _get_pairwise_distances(a,b) -> torch.FloatTensor:
@@ -161,15 +164,14 @@ class TorchMeanShift:
         seeds = original_X
         center_intensity_dict = {}
 
-        for i in range(len(seeds)):
-            if num_nn[i] > 1:  # i.e. len(points_within) > 0
-                center_intensity_dict[tuple(radius_nn_mean[i].cpu().numpy().tolist())] = num_nn[i]
+        num_nn_mask = num_nn > 1
+        num_nn = num_nn[num_nn_mask]
+        radius_nn_mean = radius_nn_mean[num_nn_mask]
+        centroid_data = torch.cat([num_nn[:, None].to(torch.float32), radius_nn_mean], dim=1)
+        unique_centroid_data = torch.unique(centroid_data, dim=0, sorted=True)
         t = time_watcher(t, '2')
-
-        sorted_by_intensity = sorted(center_intensity_dict.items(),
-                                     key=lambda tup: (tup[1], tup[0]),
-                                     reverse=True)
-        sorted_centers = torch.tensor([tup[0] for tup in sorted_by_intensity], device=device)
+        unique_centroid_data = torch.flipud(unique_centroid_data)
+        sorted_centers = unique_centroid_data[:, 1:]
         t = time_watcher(t, '3')
 
         radius_nn_mask = TorchMeanShift._get_radius_nn_mask(sorted_centers, sorted_centers, self.bandwidth)
@@ -225,6 +227,19 @@ class TorchMeanShift:
 
     def predict(self):
         raise NotImplementedError()
+
+a = torch.arange(6)
+b = torch.arange(12, 0, -2)
+
+# print(a, b)
+
+# ab = torch.cat([a[:, None], b[:, None]], dim=1)
+# idxs = np.random.choice(range(6), 6, replace=False)
+# print(idxs)
+# ab = ab[idxs]
+# u = torch.unique(ab, dim=1)
+# print(u)
+# exit()
 
 
 n_clusters=6
