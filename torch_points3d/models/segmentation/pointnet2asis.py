@@ -145,41 +145,35 @@ class TorchMeanShift:
 
     def _create_labels(self, X:torch.tensor, original_X:torch.tensor):
         device = X.device
-        t = _time_watcher()
+
         # get all_res (sklearn)
         radius_nn_mean, radius_nn_mask = self._get_radius_nn_mean(X, self.bandwidth)
         num_nn = torch.sum(radius_nn_mask, dim=1)
-        t = _time_watcher(t, 'rnnm')
-        seeds = original_X
-        center_intensity_dict = {}
 
         num_nn_mask = num_nn > 1 # i.e. len(points_within) > 0
         num_nn = num_nn[num_nn_mask]
         radius_nn_mean = radius_nn_mean[num_nn_mask]
 
-        for i in range(len(seeds)):
-            center_intensity_dict[tuple(radius_nn_mean[i].cpu().numpy().tolist())] = num_nn[i]
-        t = _time_watcher(t, 'cid')
-        sorted_by_intensity = sorted(center_intensity_dict.items(),
-                                     key=lambda tup: (tup[1], tup[0]),
-                                     reverse=True)
-        sorted_centers = torch.tensor([tup[0] for tup in sorted_by_intensity], device=device)
-        t = _time_watcher(t, 'sort')
+        num_nn = num_nn[num_nn_mask]
+        radius_nn_mean = radius_nn_mean[num_nn_mask]
+        centroid_data = torch.cat([num_nn[:, None].to(torch.float32), radius_nn_mean], dim=1)
+        unique_centroid_data = torch.unique(centroid_data, dim=0, sorted=True)
+        unique_centroid_data = torch.flipud(unique_centroid_data)
+        sorted_centers = unique_centroid_data[:, 1:]
+
         radius_nn_mask = TorchMeanShift._get_radius_nn_mask(sorted_centers, sorted_centers, self.bandwidth)
         unique = torch.ones(len(sorted_centers), dtype=bool, device=device)
-        t = _time_watcher(t, 'nnmask')
         for i in range(len(sorted_centers)):
             if unique[i]:
                 neighbor_idxs = radius_nn_mask[i]
                 unique[neighbor_idxs] = 0
                 unique[i] = 1  # leave the current point as unique
         cluster_centers = sorted_centers[unique]
-        t = _time_watcher(t, 'sc')
+        
         # ASSIGN LABELS: a point belongs to the cluster that it is closest to
         dist = self._get_pairwise_distances(original_X, cluster_centers)
         idxs = torch.argmin(dist, dim=1)
         labels = torch.zeros(len(original_X), dtype=int)
-        t = _time_watcher(t, 'pd')
         if self.cluster_all:
             labels = idxs.flatten()
         else:
@@ -197,7 +191,6 @@ class TorchMeanShift:
 
         with torch.no_grad():
             # X = torch.FloatTensor(np.copy(X)).cuda()
-            t = _time_watcher()
             for it in range(self.max_iter):
                 weight = self.kernel(self._get_pairwise_distances(X, X), self.bandwidth)
                 num = (weight[:, :, None] * X).sum(1)
@@ -209,9 +202,7 @@ class TorchMeanShift:
                 self.n_iter_ += 1
                 if shift < stop_thresh:
                     break
-            t = _time_watcher(t, 'w')
             self._create_labels(X, original_X)
-            t = _time_watcher(t, 'cl')
 
     def predict(self):
         raise NotImplementedError()
