@@ -150,7 +150,7 @@ class TorchMeanShift:
         radius_nn_mean, radius_nn_mask = self._get_radius_nn_mean(X, self.bandwidth)
         num_nn = torch.sum(radius_nn_mask, dim=1)
 
-        num_nn_mask = num_nn > 1 # i.e. len(points_within) > 0
+        num_nn_mask = num_nn > 0 # i.e. len(points_within) > 0
         num_nn = num_nn[num_nn_mask]
         radius_nn_mean = radius_nn_mean[num_nn_mask]
 

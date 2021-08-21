@@ -164,7 +164,7 @@ class TorchMeanShift:
         seeds = original_X
         center_intensity_dict = {}
 
-        num_nn_mask = num_nn > 1
+        num_nn_mask = num_nn > 0
         num_nn = num_nn[num_nn_mask]
         radius_nn_mean = radius_nn_mean[num_nn_mask]
         centroid_data = torch.cat([num_nn[:, None].to(torch.float32), radius_nn_mean], dim=1)
