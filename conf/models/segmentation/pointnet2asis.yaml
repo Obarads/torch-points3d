@@ -3,7 +3,7 @@
 PointNet2ASIS_PAPER:
     class: pointnet2asis.PointNet2ASIS
     conv_type: "DENSE"
-    # use_category: ${data.use_category}
+    use_category: ${data.use_category}
     down_conv:
         module_name: PointNetMSGDown # as PointNetSA Module
         npoint: [1024, 256, 64, 16]

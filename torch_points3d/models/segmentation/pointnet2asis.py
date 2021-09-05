@@ -45,6 +45,11 @@ def _time_watcher(previous_time=None, print_key=""):
         print('{}: {}'.format(print_key, current_time - previous_time))
     return current_time
 
+def _t2n(torch_tensor:torch.Tensor) -> np.ndarray:
+    """torch.Tensor to numpy.ndarray
+    """
+    return torch_tensor.detach().cpu().numpy()
+
 def gaussian(d:torch.FloatTensor, bw:float) -> torch.FloatTensor:
     return torch.exp(-0.5*((d/bw))**2) / (bw*math.sqrt(2*math.pi))
 
@@ -136,12 +141,6 @@ class TorchMeanShift:
         radius_nn_mean:torch.FloatTensor = X.sum(1) / radius_nn_mask.sum(-1)[:, None]
 
         return radius_nn_mean, radius_nn_mask
-    
-    @staticmethod
-    def _t2n(torch_tensor:torch.Tensor) -> np.ndarray:
-        """torch.Tensor to numpy.ndarray
-        """
-        return torch_tensor.detach().cpu().numpy()
 
     def _create_labels(self, X:torch.tensor, original_X:torch.tensor):
         device = X.device
@@ -182,8 +181,8 @@ class TorchMeanShift:
             # bool_selector = dist.flatten() <= self.bandwidth
             # labels[bool_selector] = idxs.flatten()[bool_selector]
 
-        self.cluster_centers_ = TorchMeanShift._t2n(cluster_centers)
-        self.labels_ = TorchMeanShift._t2n(labels)
+        self.cluster_centers_ = _t2n(cluster_centers)
+        self.labels_ = _t2n(labels)
 
     def fit(self, X:torch.FloatTensor):
         original_X = deepcopy(X)
@@ -304,8 +303,7 @@ class PointNet2ASIS(UnetBasedModel):
             self.category = data.categor
         
         # Get room ID
-        if self.model.training:
-            self.room_id_list = data.area_room
+        self.room_id_list = data.area_room
 
     def forward(self, epoch=-1, *args, **kwargs):
         output, embed_ins = self._network(self.input)

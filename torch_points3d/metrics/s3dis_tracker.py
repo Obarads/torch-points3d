@@ -9,6 +9,7 @@ from typing import List
 
 import torch
 from torch_geometric.nn.unpool import knn_interpolate
+from torch_geometric.data import Data
 
 from torch_points3d.metrics.confusion_matrix import ConfusionMatrix
 from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
@@ -134,7 +135,7 @@ class BlockMerging:
         if mean_num_pts_in_group is None:
             self.mean_num_pts_in_group = np.ones(self.num_classes, dtype=np.float32)
         else:
-            self.mean_num_pts_in_group = mean_num_pts_in_group.astype(np.float32)
+            self.mean_num_pts_in_group = np.array(mean_num_pts_in_group, dtype=np.float32)
 
         self.init_data()
 
@@ -144,6 +145,7 @@ class BlockMerging:
         self.volume_seg = -1* np.ones([volume_num,volume_num,volume_num]).astype(np.int32)
 
         self.ins_output = []
+        self.sem_output = []
         self.points = []
 
         self.additional_data = []
@@ -152,6 +154,7 @@ class BlockMerging:
         self, 
         block_points: np.ndarray, 
         ins_output: np.ndarray,
+        sem_output: np.ndarray,
         ins_seg: dict,
         additional_data: np.ndarray
     ):
@@ -167,10 +170,10 @@ class BlockMerging:
         """
         merged_ins_output = self._block_merging(self.volume, self.volume_seg, block_points, ins_output, ins_seg, self.gap)
         self.ins_output.append(merged_ins_output)
+        self.sem_output.append(sem_output)
         self.points.append(block_points)
 
         if isinstance(additional_data, np.ndarray) or isinstance(additional_data, list):
-            assert len(additional_data) == len(block_points)
             self.additional_data.append(additional_data)
         else:
             self.additional_data.append([None for _ in range(len(block_points))])
@@ -221,12 +224,18 @@ class BlockMerging:
         return finalgrouplabel
 
     def get_result(self) -> np.ndarray:
-        scene_pc = self.points.reshape([-1, self.points.shape[-1]])
-        scene_ins_label = self.ins_output.reshape(-1)
+        scene_pc = np.array(self.points)
+        scene_ins_label = np.array(self.ins_output)
+        scene_sem_label = np.array(self.sem_output)
+
+        scene_pc = scene_pc.reshape([-1, scene_pc.shape[-1]])
+        scene_ins_label = scene_ins_label.reshape(-1)
+        scene_sem_label = scene_sem_label.reshape(-1)
         volume = self.volume
-        x = (scene_pc[:, 6] / self.gap).astype(np.int32)
-        y = (scene_pc[:, 7] / self.gap).astype(np.int32)
-        z = (scene_pc[:, 8] / self.gap).astype(np.int32)
+
+        x = (scene_pc[:, 0] / self.gap).astype(np.int32)
+        y = (scene_pc[:, 1] / self.gap).astype(np.int32)
+        z = (scene_pc[:, 2] / self.gap).astype(np.int32)
         for i in range(scene_ins_label.shape[0]):
             if volume[x[i], y[i], z[i]] != -1:
                 scene_ins_label[i] = volume[x[i], y[i], z[i]]
@@ -239,14 +248,13 @@ class BlockMerging:
             if g == -1:
                 continue
             tmp = (scene_ins_label == g)
-            sem_seg_g = int(stats.mode(scene_ins_label[tmp])[0])
-            #if np.sum(tmp) > 500:
+            sem_seg_g = int(stats.mode(scene_sem_label[tmp])[0])
             if np.sum(tmp) > 0.25 * self.mean_num_pts_in_group[sem_seg_g]:
                 group_pred_final[tmp] = grouppred_cnt
                 pts_in_pred[sem_seg_g] += [tmp]
                 grouppred_cnt += 1
 
-        return group_pred_final.astype(np.int32)
+        return group_pred_final.astype(np.int32), scene_sem_label.astype(np.int32)
 
     def get_additional_data(self):
         """get additional data of append_block.
@@ -255,7 +263,7 @@ class BlockMerging:
         """
         additional_data: np.ndarray = np.asarray(self.additional_data)
         shape = additional_data.shape
-        additional_data = additional_data.reshape(shape[0]*shape[1], shape[2:])
+        additional_data = additional_data.reshape(-1, shape[2])
         return additional_data
 
 class BatchBlockMerging():
@@ -270,14 +278,14 @@ class BatchBlockMerging():
         self.block_merging_dict[room_id] = BlockMerging(
             num_classes=self.num_classes,
             gap=self.gap,
-            mean_num_pts_in_group=self.mean_num_pts_in_group,
-            save_gt=self.save_gt
+            mean_num_pts_in_group=self.mean_num_pts_in_group
         )
 
     def append_blocks(
         self, 
         batch_block_points: List[np.ndarray],
         batch_ins_output: List[np.ndarray],
+        batch_sem_output: List[np.ndarray],
         batch_ins_seg: List[dict],
         batch_room_id: List[np.ndarray],
         batch_additional_data:List[np.ndarray]=None
@@ -290,21 +298,26 @@ class BatchBlockMerging():
             batch_room_id (List[np.ndarray]): room ID of each block, [B, N]
             batch_additional_data (List[np.ndarray]): 
         """
-        for room_id in range(len(batch_room_id)):
-            if room_id in self.block_merging_dict:
+        for idx in range(len(batch_room_id)):
+            room_id = batch_room_id[idx][0]
+            if not room_id in self.block_merging_dict:
                 self.create_block_merging(room_id)
             self.block_merging_dict[room_id].append_block(
-                batch_block_points,
-                batch_ins_output,
-                batch_ins_seg,
-                batch_additional_data
+                batch_block_points[idx],
+                batch_ins_output[idx],
+                batch_sem_output[idx],
+                batch_ins_seg[idx],
+                batch_additional_data[idx]
             )
 
     def get_results(self) -> List[np.ndarray]:
-        results = []
+        ins_results = []
+        sem_results = []
         for room_id in self.block_merging_dict:
-            results.append(self.block_merging_dict[room_id].get_result())
-        return results
+            ins, sem = self.block_merging_dict[room_id].get_result()
+            ins_results.append(ins)
+            sem_results.append(sem)
+        return ins_results, sem_results
 
     def get_additional_data_list(self):
         additional_data_list = []
@@ -324,10 +337,11 @@ class BlockMergingTracker(SegmentationTracker):
         self.blcok_merging_list = BatchBlockMerging(self._num_classes, self._dataset.gap, self._dataset.mean_num_pts_in_group)
         self.gt_ins_labels = []
 
-        self.tpsins = [[] for itmp in range(self._num_classes)]
-        self.fpsins = [[] for itmp in range(self._num_classes)]
-        self.all_mean_cov = [[] for itmp in range(self._num_classes)]
-        self.all_mean_weighted_cov = [[] for itmp in range(self._num_classes)]
+        self._tpsins = [[] for itmp in range(self._num_classes)]
+        self._fpsins = [[] for itmp in range(self._num_classes)]
+        self._all_mean_cov = [[] for itmp in range(self._num_classes)]
+        self._all_mean_weighted_cov = [[] for itmp in range(self._num_classes)]
+        self._total_gt_ins = np.zeros(self._num_classes)
 
     def track(self, model: model_interface.TrackerInterface, full_res=False, **kwargs):
         super().track(model)
@@ -336,21 +350,28 @@ class BlockMergingTracker(SegmentationTracker):
         if self._stage == "train" or not full_res:
             return
 
-        inputs = model.get_input()
+        inputs:Data = model.get_input()
+        xyz_list = inputs.x.transpose(1,2)[:, :, 3:] # normalized xyz in a room
+
         ins_outputs, ins_seg, room_id_list = model.get_output_for_BlockMerging()
         ins_targets = model.get_labels_for_BlockMerging()
         sem_outputs = model.get_output()
         sem_targets = model.get_labels()
 
+        xyz_list = self._convert(xyz_list)
+        room_id_list = self._convert(room_id_list)
+        ins_targets = self._convert(ins_targets)
+        sem_outputs = np.argmax(self._convert(sem_outputs), axis=-1)
+        sem_targets = self._convert(sem_targets)
+
         # Get additional data to evaluate network (number of points, 3)
         # `3` is [instance gt label, semantic output, semantic gt label]
         additional_data = np.concatenate([
-            ins_targets[:, np.newaxis],
-            sem_outputs[:, np.newaxis],
-            sem_targets[:, np.newaxis]
-        ], axis=-1) 
+            ins_targets[:, :, np.newaxis],
+            sem_targets[:, :, np.newaxis]
+        ], axis=-1)
 
-        self.blcok_merging_list.append_blocks(inputs, ins_outputs, ins_seg, room_id_list, additional_data)
+        self.blcok_merging_list.append_blocks(xyz_list, ins_outputs, sem_outputs, ins_seg, room_id_list, additional_data)
 
     def _ins_compute_metrics(self, sem_outputs, ins_outputs, sem_gt, ins_gt):
         mask = ins_gt != self._ignore_label
@@ -359,7 +380,6 @@ class BlockMergingTracker(SegmentationTracker):
         sem_gt = sem_gt[mask]
         ins_gt = ins_gt[mask]
 
-        total_gt_ins = np.zeros(self._num_classes)
         at = 0.5
 
         un = np.unique(ins_outputs)
@@ -413,7 +433,7 @@ class BlockMergingTracker(SegmentationTracker):
             tp = [0.] * len(pts_in_pred[i_sem])
             fp = [0.] * len(pts_in_pred[i_sem])
             gtflag = np.zeros(len(pts_in_gt[i_sem]))
-            total_gt_ins[i_sem] += len(pts_in_gt[i_sem])
+            self._total_gt_ins[i_sem] += len(pts_in_gt[i_sem])
 
             for ip, ins_pred in enumerate(pts_in_pred[i_sem]):
                 ovmax = -1.
@@ -437,23 +457,25 @@ class BlockMergingTracker(SegmentationTracker):
 
     def finalise(self, full_res=False, **kwargs):
         if full_res:
-            all_room_ins_outputs = self.blcok_merging_list.get_results()
+            all_room_ins_outputs, all_room_sem_outputs = self.blcok_merging_list.get_results()
             all_room_additional_data = self.blcok_merging_list.get_additional_data_list()
-            all_room_ins_targets = all_room_additional_data[:, 0]
-            all_room_sem_outputs = all_room_additional_data[:, 1]
-            all_room_sem_targets = all_room_additional_data[:, 2]
 
             # compute metric of each room.
             for room_idx in range(len(all_room_ins_outputs)):
+                room_ins_outputs = all_room_ins_outputs[room_idx]
+                room_sem_outputs = all_room_sem_outputs[room_idx]
+                room_additional_data = all_room_additional_data[room_idx]
+                room_ins_targets = room_additional_data[:, 0]
+                room_sem_targets = room_additional_data[:, 1]
                 self._ins_compute_metrics(
-                    all_room_sem_outputs[room_idx],
-                    all_room_ins_outputs[room_idx],
-                    all_room_sem_targets[room_idx],
-                    all_room_ins_targets[room_idx]
+                    room_sem_outputs,
+                    room_ins_outputs,
+                    room_sem_targets,
+                    room_ins_targets
                 )
 
-            mucov = np.zeros(self._num_classe)
-            mwcov = np.zeros(self._num_classe)
+            mucov = np.zeros(self._num_classes)
+            mwcov = np.zeros(self._num_classes)
             for i_sem in range(self._num_classes):
                 mucov[i_sem] = np.mean(self._all_mean_cov[i_sem])
                 mwcov[i_sem] = np.mean(self._all_mean_weighted_cov[i_sem])
@@ -487,3 +509,39 @@ class BlockMergingTracker(SegmentationTracker):
                 metrics["{}_mucov".format(self._stage)] = self._mucov
         return metrics
 
+# inference_transform = Compose([
+#     FixedPoints(4096, replace=True),
+# ])
+# Size of train_dataset = 16733
+# Size of test_dataset = 6852
+# Size of val_dataset = 0
+# Batch size = 24
+# [2021-09-05 08:56:42,379][torch_points3d.datasets.base_dataset][INFO] - Available stage selection datasets:  ['test'] 
+# [2021-09-05 08:56:42,379][torch_points3d.datasets.base_dataset][INFO] - The models will be selected using the metrics on following dataset:  test 
+# [2021-09-05 08:56:42,385][torch_points3d.metrics.base_tracker][INFO] - Access tensorboard with the following command <tensorboard --logdir=/home/coder/workspace/code/myrepo/torch-points3d/outputs/2021-09-05/08-56-35/tensorboard>
+# [2021-09-05 08:56:43,862][torch_points3d.trainer][INFO] - EPOCH 1 / 100
+# 100%|█| 698/698 [06:37<00:00,  1.75it/s, data_loading=0.017, iteration=0.366, train_acc=72.26, train_instance_los
+# /home/coder/anaconda3/envs/tp3v1/lib/python3.7/site-packages/numpy/core/fromnumeric.py:3373: RuntimeWarning: Mean of empty slice.
+#   out=out, **kwargs)
+# /home/coder/anaconda3/envs/tp3v1/lib/python3.7/site-packages/numpy/core/_methods.py:170: RuntimeWarning: invalid value encountered in double_scalars
+#   ret = ret.dtype.type(ret / rcount)
+# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:492: RuntimeWarning: invalid value encountered in double_scalars
+#   rec = tp / self._total_gt_ins[i_sem]
+# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:493: RuntimeWarning: invalid value encountered in double_scalars
+#   prec = tp / (tp + fp)
+# [2021-09-05 09:03:21,782][torch_points3d.trainer][INFO] - Learning rate = 0.001000
+# 100%|█| 286/286 [13:11<00:00,  2.77s/it, test_acc=78.34, test_instance_loss=1.384, test_macc=43.57, test_miou=34.
+# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:493: RuntimeWarning: invalid value encountered in double_scalars
+
+# [2021-09-05 09:30:21,321][torch_points3d.metrics.base_tracker][INFO] - ==================================================
+# [2021-09-05 09:30:21,321][torch_points3d.metrics.base_tracker][INFO] -     test_instance_loss = 1.3848291635513306
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_semantic_loss = 0.8313604593276978
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_acc = 78.34280607509669
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_macc = 43.57548692027422
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_miou = 34.995921031746995
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_miou_per_class = {0: '85.40', 1: '95.70', 2: '64.34', 3: '0.00', 4: '0.00', 5: '30.23', 6: '12.51', 7: '50.37', 8: '55.49', 9: '27.35', 10: '0.00', 11: '0.00', 12: '33.56'}
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_precision = nan
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_recall = 0.2023353667440993
+# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_mwcov = 0.2897675672666181
+# [2021-09-05 09:30:21,323][torch_points3d.metrics.base_tracker][INFO] -     test_mucov = 0.23577564943359372
+# [2021-09-05 09:30:21,323][torch_points3d.metrics.base_tracker][INFO] - ==================================================

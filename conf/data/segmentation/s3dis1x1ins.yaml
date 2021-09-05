@@ -15,5 +15,5 @@ test_transform:
       lparams: [4096]
 
 tracker_options: # Extra options for the tracker
-  full_res: True
+  full_res: False
   make_submission: False

@@ -919,7 +919,7 @@ class S3DIS1x1Ins(InMemoryDataset):
                  root,
                  test_area=6,
                  train=True,
-                 slice_type='room',
+                 slice_type='block',
                  transform=None,
                  pre_transform=None,
                  pre_filter=None):
@@ -1052,12 +1052,12 @@ class S3DIS1x1Ins(InMemoryDataset):
                 for block_idx in range(len(points)):
                     num_points = len(points[block_idx, :, :3])
                     data = Data(
-                        pos=torch.from_numpy(points[block_idx, :, :3]),
-                        x=torch.from_numpy(points[block_idx, :, 3:]),
+                        pos=torch.from_numpy(points[block_idx, :, :3]), # normalized xyz in a block
+                        x=torch.from_numpy(points[block_idx, :, 3:]), # rgb and normalized xyz in a room
                         y=torch.from_numpy(sem_labels[block_idx]),
                         ins_y=torch.from_numpy(ins_labels[block_idx]),
-                        area_room=torch.tensor([area_room_idx]*num_points),
-                        block=torch.tensor([block_idx]*num_points)
+                        area_room=torch.tensor([area_room_idx]*num_points), # room index (0 ~ (number of rooms in area 1 ~ 6))
+                        block=torch.tensor([block_idx]*num_points) # block index in a room (0 ~ 4096)
                     )
                     if self.pre_filter is not None and not self.pre_filter(data):
                         continue
