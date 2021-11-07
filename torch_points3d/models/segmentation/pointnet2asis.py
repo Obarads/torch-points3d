@@ -310,7 +310,7 @@ class PointNet2ASIS(UnetBasedModel):
         self.output = output.transpose(1,2) # (B, NUM_CLASSES, N) -> (B, N, NUM_CLASSES) for Tracker
         self.embed_ins = embed_ins # (B, ins_output_dim, N)
 
-        if not self.model.training:  # for eval.py
+        if not self.model.training:
             ins_output_labels = []
             ins_seg_list = []
 
