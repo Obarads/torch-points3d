@@ -193,6 +193,7 @@ def to_ply(pos, label, file):
     el = PlyElement.describe(ply_array, "S3DIS")
     PlyData([el], byte_order=">").write(file)
 
+
 def t2n(tensor):
     """Convert torch.tensor to numpy.ndarray.
 
@@ -208,29 +209,32 @@ def t2n(tensor):
     """
     return tensor.cpu().detach().numpy()
 
+
 def sample_data(data, num_sample):
-    """ data is in N x ...
-        we want to keep num_samplexC of them.
-        if N > num_sample, we will randomly keep num_sample of them.
-        if N < num_sample, we will randomly duplicate samples.
+    """data is in N x ...
+    we want to keep num_samplexC of them.
+    if N > num_sample, we will randomly keep num_sample of them.
+    if N < num_sample, we will randomly duplicate samples.
     """
     N = data.shape[0]
-    if (N == num_sample):
+    if N == num_sample:
         return data, range(N)
-    elif (N > num_sample):
+    elif N > num_sample:
         sample = np.random.choice(N, num_sample)
         return data[sample, ...], sample
     else:
-        sample = np.random.choice(N, num_sample-N)
+        sample = np.random.choice(N, num_sample - N)
         dup_data = data[sample, ...]
         # fix range bug for python3 (warry): range(N)->list(range(N))
-        return np.concatenate([data, dup_data], 0), list(range(N))+list(sample) 
+        return np.concatenate([data, dup_data], 0), list(range(N)) + list(sample)
+
 
 def sample_data_label(data, label, inslabel, num_sample):
     new_data, sample_indices = sample_data(data, num_sample)
     new_label = label[sample_indices]
     new_inslabel = inslabel[sample_indices]
     return new_data, new_label, new_inslabel
+
 
 # Ref: https://github.com/WXinlong/ASIS/blob/d71c3d60e985f5bebe620c8e1a1cb0042fb2f5f6/indoor3d_util.py#L137
 # Split single room data into blocks.
@@ -239,9 +243,10 @@ def sample_data_label(data, label, inslabel, num_sample):
 # points : (B, N, 6) xyzrgb
 # sem_labels : (B, N) semantic labels
 # ins_labels : (B, N) instance labels
-def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
-                random_sample=False, sample_num=None, sample_aug=1):
-    """ Prepare block training data.
+def room2blocks(
+    data, label, inslabel, num_point, block_size=1.0, stride=1.0, random_sample=False, sample_num=None, sample_aug=1
+):
+    """Prepare block training data.
     Args:
         data: N x 6 numpy array, 012 are XYZ in meters, 345 are RGB in [0,1]
             assumes the data is shifted (min point is origin) and aligned
@@ -258,14 +263,14 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
         block_datas: K x num_point x 6 np array of XYZRGB, RGB is in [0,1]
         block_labels: K x num_point x 1 np array of uint8 labels
         block_labels: K x num_point x 1 np array of uint8 labels
-        
+
     TODO: for this version, blocking is in fixed, non-overlapping pattern.
     """
-    assert(stride<=block_size)
+    assert stride <= block_size
 
     limit = np.amax(data, 0)[0:3]
-     
-    # Get the corner location for our sampling blocks    
+
+    # Get the corner location for our sampling blocks
     xbeg_list = []
     ybeg_list = []
     if not random_sample:
@@ -274,12 +279,12 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
         for i in range(num_block_x):
             if i % 2 == 0:
                 for j in range(num_block_y):
-                    xbeg_list.append(i*stride)
-                    ybeg_list.append(j*stride)
+                    xbeg_list.append(i * stride)
+                    ybeg_list.append(j * stride)
             else:
                 for j in range(num_block_y)[::-1]:
-                    xbeg_list.append(i*stride)
-                    ybeg_list.append(j*stride)
+                    xbeg_list.append(i * stride)
+                    ybeg_list.append(j * stride)
 
     else:
         num_block_x = int(np.ceil(limit[0] / block_size))
@@ -287,8 +292,8 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
         if sample_num is None:
             sample_num = num_block_x * num_block_y * sample_aug
         for _ in range(sample_num):
-            xbeg = np.random.uniform(-block_size, limit[0]) 
-            ybeg = np.random.uniform(-block_size, limit[1]) 
+            xbeg = np.random.uniform(-block_size, limit[0])
+            ybeg = np.random.uniform(-block_size, limit[1])
             xbeg_list.append(xbeg)
             ybeg_list.append(ybeg)
 
@@ -297,29 +302,33 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
     block_label_list = []
     block_inslabel_list = []
     idx = 0
-    for idx in range(len(xbeg_list)): 
-       xbeg = xbeg_list[idx]
-       ybeg = ybeg_list[idx]
-       xcond = (data[:,0]<=xbeg+block_size) & (data[:,0]>=xbeg)
-       ycond = (data[:,1]<=ybeg+block_size) & (data[:,1]>=ybeg)
-       cond = xcond & ycond
-       if np.sum(cond) < 100: # discard block if there are less than 100 pts.
-           continue
-       
-       block_data = data[cond, :]
-       block_label = label[cond]
-       block_inslabel = inslabel[cond]
-       
-       # randomly subsample data
-       block_data_sampled, block_label_sampled, block_inslabel_sampled = \
-           sample_data_label(block_data, block_label, block_inslabel, num_point)
-       block_data_list.append(np.expand_dims(block_data_sampled, 0))
-       block_label_list.append(np.expand_dims(block_label_sampled, 0))
-       block_inslabel_list.append(np.expand_dims(block_inslabel_sampled, 0))
-            
-    return np.concatenate(block_data_list, 0), \
-           np.concatenate(block_label_list, 0),\
-           np.concatenate(block_inslabel_list, 0)
+    for idx in range(len(xbeg_list)):
+        xbeg = xbeg_list[idx]
+        ybeg = ybeg_list[idx]
+        xcond = (data[:, 0] <= xbeg + block_size) & (data[:, 0] >= xbeg)
+        ycond = (data[:, 1] <= ybeg + block_size) & (data[:, 1] >= ybeg)
+        cond = xcond & ycond
+        if np.sum(cond) < 100:  # discard block if there are less than 100 pts.
+            continue
+
+        block_data = data[cond, :]
+        block_label = label[cond]
+        block_inslabel = inslabel[cond]
+
+        # randomly subsample data
+        block_data_sampled, block_label_sampled, block_inslabel_sampled = sample_data_label(
+            block_data, block_label, block_inslabel, num_point
+        )
+        block_data_list.append(np.expand_dims(block_data_sampled, 0))
+        block_label_list.append(np.expand_dims(block_label_sampled, 0))
+        block_inslabel_list.append(np.expand_dims(block_inslabel_sampled, 0))
+
+    return (
+        np.concatenate(block_data_list, 0),
+        np.concatenate(block_label_list, 0),
+        np.concatenate(block_inslabel_list, 0),
+    )
+
 
 # def room2blocks_plus_normalized(data_label, num_point, block_size, stride,
 #                                 random_sample, sample_num, sample_aug):
@@ -330,8 +339,9 @@ def room2blocks(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
 #     data[:,3:6] /= 255.0
 #     label = data_label[:,-2].astype(np.uint8)
 #     inslabel = data_label[:,-1].astype(np.uint8)
-def room2blocks_plus_normalized(data, label, inslabel, num_point, block_size=1.0, stride=1.0,
-                random_sample=False, sample_num=None, sample_aug=1):
+def room2blocks_plus_normalized(
+    data, label, inslabel, num_point, block_size=1.0, stride=1.0, random_sample=False, sample_num=None, sample_aug=1
+):
     """
     Parameters
     ----------
@@ -349,40 +359,41 @@ def room2blocks_plus_normalized(data, label, inslabel, num_point, block_size=1.0
         stride for block sweeping
     random_sample: bool
         if True, we will randomly sample blocks in the room
-    sample_num: int 
+    sample_num: int
         if random sample, how many blocks to sample [default: None]
-    sample_aug: 
+    sample_aug:
         if random sample, how much aug
 
     Returns
     -------
-    new_data_batch: np.ndarray (K, num_point, 9) 
+    new_data_batch: np.ndarray (K, num_point, 9)
         np array of XYZRGBnormalizedXYZ, RGB is in [0,1]
-    label_batch: np.ndarray (K, num_point) 
+    label_batch: np.ndarray (K, num_point)
         np array of uint8 labels
-    inslabel_batch: np.ndarray (K, num_point) 
+    inslabel_batch: np.ndarray (K, num_point)
         np array of uint8 labels
     """
 
-    max_room_x = max(data[:,0])
-    max_room_y = max(data[:,1])
-    max_room_z = max(data[:,2])
-    
+    max_room_x = max(data[:, 0])
+    max_room_y = max(data[:, 1])
+    max_room_z = max(data[:, 2])
+
     data_batch, label_batch, inslabel_batch = room2blocks(
-        data, label, inslabel, num_point, block_size, stride, random_sample, 
-        sample_num, sample_aug)
+        data, label, inslabel, num_point, block_size, stride, random_sample, sample_num, sample_aug
+    )
 
     new_data_batch = np.zeros((data_batch.shape[0], num_point, 9))
     for b in range(data_batch.shape[0]):
-        new_data_batch[b, :, 6] = data_batch[b, :, 0]/max_room_x
-        new_data_batch[b, :, 7] = data_batch[b, :, 1]/max_room_y
-        new_data_batch[b, :, 8] = data_batch[b, :, 2]/max_room_z
+        new_data_batch[b, :, 6] = data_batch[b, :, 0] / max_room_x
+        new_data_batch[b, :, 7] = data_batch[b, :, 1] / max_room_y
+        new_data_batch[b, :, 8] = data_batch[b, :, 2] / max_room_z
         minx = min(data_batch[b, :, 0])
         miny = min(data_batch[b, :, 1])
-        data_batch[b, :, 0] -= (minx+block_size/2)
-        data_batch[b, :, 1] -= (miny+block_size/2)
+        data_batch[b, :, 0] -= minx + block_size / 2
+        data_batch[b, :, 1] -= miny + block_size / 2
     new_data_batch[:, :, 0:6] = data_batch
     return new_data_batch, label_batch, inslabel_batch
+
 
 ################################### 1m cylinder s3dis ###################################
 
@@ -427,8 +438,8 @@ class S3DIS1x1Dataset(BaseDataset):
 
 
 class S3DISOriginalFused(InMemoryDataset):
-    """ Original S3DIS dataset. Each area is loaded individually and can be processed using a pre_collate transform. 
-    This transform can be used for example to fuse the area into a single space and split it into 
+    """Original S3DIS dataset. Each area is loaded individually and can be processed using a pre_collate transform.
+    This transform can be used for example to fuse the area into a single space and split it into
     spheres or smaller regions. If no fusion is applied, each element in the dataset is a single room by default.
 
     http://buildingparser.stanford.edu/dataset.html
@@ -673,7 +684,7 @@ class S3DISOriginalFused(InMemoryDataset):
 
 
 class S3DISSphere(S3DISOriginalFused):
-    """ Small variation of S3DISOriginalFused that allows random sampling of spheres 
+    """Small variation of S3DISOriginalFused that allows random sampling of spheres
     within an Area during training and validation. Spheres have a radius of 2m. If sample_per_epoch is not specified, spheres
     are taken on a 2m grid.
 
@@ -813,7 +824,7 @@ class S3DISCylinder(S3DISSphere):
 
 
 class S3DISFusedDataset(BaseDataset):
-    """ Wrapper around S3DISSphere that creates train and test datasets.
+    """Wrapper around S3DISSphere that creates train and test datasets.
 
     http://buildingparser.stanford.edu/dataset.html
 
@@ -872,7 +883,7 @@ class S3DISFusedDataset(BaseDataset):
 
     @staticmethod
     def to_ply(pos, label, file):
-        """ Allows to save s3dis predictions to disk using s3dis color scheme
+        """Allows to save s3dis predictions to disk using s3dis color scheme
 
         Parameters
         ----------
@@ -900,8 +911,7 @@ class S3DISFusedDataset(BaseDataset):
 
 
 class S3DIS1x1Ins(InMemoryDataset):
-    """New dataset
-    """
+    """New dataset"""
 
     form_url = (
         "https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1"
@@ -916,16 +926,11 @@ class S3DIS1x1Ins(InMemoryDataset):
     num_points = 4096
     block_size = 1.0
     stride = 0.5
-    valid_slice_types = ['block', 'room']
+    valid_slice_types = ["block", "room"]
 
-    def __init__(self,
-                 root,
-                 test_area=6,
-                 train=True,
-                 slice_type='block',
-                 transform=None,
-                 pre_transform=None,
-                 pre_filter=None):
+    def __init__(
+        self, root, test_area=6, train=True, slice_type="block", transform=None, pre_transform=None, pre_filter=None
+    ):
         assert test_area >= 1 and test_area <= 6
         self.test_area = test_area
         assert slice_type in self.valid_slice_types
@@ -936,12 +941,12 @@ class S3DIS1x1Ins(InMemoryDataset):
 
         self.data, slices = torch.load(path)
         block_slices, room_slices = slices
-        if slice_type == 'block':
+        if slice_type == "block":
             self.slices = block_slices
-        elif slice_type == 'room':
+        elif slice_type == "room":
             self.slices = room_slices
         else:
-            raise ValueError('slice_type is any of these: {}'.format(self.valid_slice_types))
+            raise ValueError("slice_type is any of these: {}".format(self.valid_slice_types))
 
     @property
     def raw_file_names(self):
@@ -950,7 +955,7 @@ class S3DIS1x1Ins(InMemoryDataset):
     @property
     def processed_file_names(self):
         test_area = self.test_area
-        return ['{}_{}.pt'.format(s, test_area) for s in ['train', 'test']]
+        return ["{}_{}.pt".format(s, test_area) for s in ["train", "test"]]
 
     def download(self):
         raw_folders = os.listdir(self.raw_dir)
@@ -992,7 +997,7 @@ class S3DIS1x1Ins(InMemoryDataset):
         area_data_list = [{} for _ in range(6)]  # [area, {room: [points, sem_labels, ins_labels]}]
         for area in areas:
             area_num = int(area[-1]) - 1
-            pt_path = osp.join(self.processed_dir, area + '.pt')
+            pt_path = osp.join(self.processed_dir, area + ".pt")
 
             ### Check area pt file
             if os.path.exists(pt_path):  ### If Area_X.pt is found
@@ -1010,8 +1015,9 @@ class S3DIS1x1Ins(InMemoryDataset):
                 ### Create room data
                 for (area, room_name, file_path) in file_paths:
                     ###### extract single room data
-                    xyz, rgb, semantic_labels, instance_labels, room_label = \
-                        read_s3dis_format(file_path, room_name, label_out=True)
+                    xyz, rgb, semantic_labels, instance_labels, room_label = read_s3dis_format(
+                        file_path, room_name, label_out=True
+                    )
                     rgb_norm = rgb.float() / 255.0
 
                     ###### create block data (block = 1x1m region)
@@ -1021,9 +1027,12 @@ class S3DIS1x1Ins(InMemoryDataset):
 
                     ### Split single room data into blocks.
                     points, sem_labels, ins_labels = room2blocks_plus_normalized(
-                        t2n(torch.cat([modified_xyz, rgb_norm], dim=1)), 
-                        t2n(semantic_labels), t2n(instance_labels), self.num_points, 
-                        block_size=self.block_size, stride=self.stride
+                        t2n(torch.cat([modified_xyz, rgb_norm], dim=1)),
+                        t2n(semantic_labels),
+                        t2n(instance_labels),
+                        self.num_points,
+                        block_size=self.block_size,
+                        stride=self.stride,
                     )
 
                     ### add room data to area data list
@@ -1036,14 +1045,14 @@ class S3DIS1x1Ins(InMemoryDataset):
         train_list = []
         test_list = []
 
-        area_room_idx = 0 # room ID
+        area_room_idx = 0  # room ID
         train_room_slices = [0]
         test_room_slices = [0]
         print("Create dataset ({} and {})".format(self.processed_paths[0], self.processed_paths[1]))
         for area_num, area_data in enumerate(area_data_list):
-            if area_num+1 == self.test_area:
+            if area_num + 1 == self.test_area:
                 data_list = test_list
-                room_slices= test_room_slices
+                room_slices = test_room_slices
             else:
                 data_list = train_list
                 room_slices = train_room_slices
@@ -1055,12 +1064,14 @@ class S3DIS1x1Ins(InMemoryDataset):
                 for block_idx in range(len(points)):
                     num_points = len(points[block_idx, :, :3])
                     data = Data(
-                        pos=torch.from_numpy(points[block_idx, :, :3]), # normalized xyz in a block
-                        x=torch.from_numpy(points[block_idx, :, 3:]), # rgb and normalized xyz in a room
+                        pos=torch.from_numpy(points[block_idx, :, :3]),  # normalized xyz in a block
+                        x=torch.from_numpy(points[block_idx, :, 3:]),  # rgb and normalized xyz in a room
                         y=torch.from_numpy(sem_labels[block_idx]),
                         ins_y=torch.from_numpy(ins_labels[block_idx]),
-                        area_room=torch.tensor([area_room_idx]*num_points), # room index (0 ~ (number of rooms in area 1 ~ 6))
-                        block=torch.tensor([block_idx]*num_points) # block index in a room (0 ~ 4096)
+                        area_room=torch.tensor(
+                            [area_room_idx] * num_points
+                        ),  # room index (0 ~ (number of rooms in area 1 ~ 6))
+                        block=torch.tensor([block_idx] * num_points),  # block index in a room (0 ~ 4096)
                     )
                     if self.pre_filter is not None and not self.pre_filter(data):
                         continue
@@ -1071,7 +1082,7 @@ class S3DIS1x1Ins(InMemoryDataset):
 
                 if len(data_list) > check:
                     area_room_idx += 1
-                    room_slices.append(room_slices[-1]+num_slice)
+                    room_slices.append(room_slices[-1] + num_slice)
 
         train_data, train_block_slices, train_room_slices = self.collate(train_list, train_room_slices)
         test_data, test_block_slices, test_room_slices = self.collate(test_list, test_room_slices)
@@ -1083,8 +1094,8 @@ class S3DIS1x1Ins(InMemoryDataset):
 
 
 class S3DIS1x1InsDataset(BaseDataset):
-    """Create 1m x 1m block datasets with instance labels from room data of S3DIS.
-    """
+    """Create 1m x 1m block datasets with instance labels from room data of S3DIS."""
+
     def __init__(self, dataset_opt):
         super().__init__(dataset_opt)
 
@@ -1095,7 +1106,7 @@ class S3DIS1x1InsDataset(BaseDataset):
             self._data_path,
             test_area=self.dataset_opt.fold,
             train=True,
-            slice_type='block',
+            slice_type="block",
             transform=self.train_transform,
         )
 
@@ -1103,10 +1114,10 @@ class S3DIS1x1InsDataset(BaseDataset):
             self._data_path,
             test_area=self.dataset_opt.fold,
             train=False,
-            slice_type='block',
+            slice_type="block",
             transform=self.train_transform,
         )
- 
+
         if dataset_opt.class_weight_method:
             self.add_weights(class_weight_method=dataset_opt.class_weight_method)
 
@@ -1122,4 +1133,5 @@ class S3DIS1x1InsDataset(BaseDataset):
         # from torch_points3d.metrics.segmentation_tracker import SegmentationTracker
         # return SegmentationTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)
         from torch_points3d.metrics.s3dis_tracker import BlockMergingTracker
+
         return BlockMergingTracker(self, wandb_log=wandb_log, use_tensorboard=tensorboard_log)

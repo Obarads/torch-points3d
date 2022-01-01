@@ -1,9 +1,6 @@
-import re
 from typing import Dict, Any
 import logging
 import numpy as np
-from numpy.core.defchararray import add
-from numpy.lib.npyio import save
 from scipy import stats
 from typing import List
 
@@ -31,8 +28,7 @@ class S3DISTracker(SegmentationTracker):
         self._iou_per_class = {}
 
     def track(self, model: model_interface.TrackerInterface, full_res=False, data=None, **kwargs):
-        """ Add current model predictions (usually the result of a batch) to the tracking
-        """
+        """Add current model predictions (usually the result of a batch) to the tracking"""
         super().track(model)
 
         # Train mode or low res, nothing special to do
@@ -103,7 +99,10 @@ class S3DISTracker(SegmentationTracker):
 
         # Full res interpolation
         full_pred = knn_interpolate(
-            self._test_area.votes[has_prediction], self._test_area.pos[has_prediction], self._test_area.pos, k=1,
+            self._test_area.votes[has_prediction],
+            self._test_area.pos[has_prediction],
+            self._test_area.pos,
+            k=1,
         )
 
         # Full res pred
@@ -116,8 +115,7 @@ class S3DISTracker(SegmentationTracker):
         return self._full_confusion
 
     def get_metrics(self, verbose=False) -> Dict[str, Any]:
-        """ Returns a dictionnary of all metrics and losses being tracked
-        """
+        """Returns a dictionnary of all metrics and losses being tracked"""
         metrics = super().get_metrics(verbose)
 
         if verbose:
@@ -129,7 +127,7 @@ class S3DISTracker(SegmentationTracker):
 
 
 class BlockMerging:
-    def __init__(self, num_classes:int, gap:float=5e-3, mean_num_pts_in_group:np.ndarray=None):
+    def __init__(self, num_classes: int, gap: float = 5e-3, mean_num_pts_in_group: np.ndarray = None):
         self.num_classes = num_classes
         self.gap = gap
         if mean_num_pts_in_group is None:
@@ -140,9 +138,9 @@ class BlockMerging:
         self.init_data()
 
     def init_data(self):
-        volume_num = int(1. / self.gap)+1
-        self.volume = -1* np.ones([volume_num,volume_num,volume_num]).astype(np.int32)
-        self.volume_seg = -1* np.ones([volume_num,volume_num,volume_num]).astype(np.int32)
+        volume_num = int(1.0 / self.gap) + 1
+        self.volume = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
+        self.volume_seg = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
 
         self.ins_output = []
         self.sem_output = []
@@ -151,12 +149,12 @@ class BlockMerging:
         self.additional_data = []
 
     def append_block(
-        self, 
-        block_points: np.ndarray, 
+        self,
+        block_points: np.ndarray,
         ins_output: np.ndarray,
         sem_output: np.ndarray,
         ins_seg: dict,
-        additional_data: np.ndarray
+        additional_data: np.ndarray,
     ):
         """
         Args:
@@ -168,7 +166,9 @@ class BlockMerging:
         Note:
             About additional_data: This arg is additional infomation for each point. For example, this arg can store GT instance labels to evaluate a network.
         """
-        merged_ins_output = self._block_merging(self.volume, self.volume_seg, block_points, ins_output, ins_seg, self.gap)
+        merged_ins_output = self._block_merging(
+            self.volume, self.volume_seg, block_points, ins_output, ins_seg, self.gap
+        )
         self.ins_output.append(merged_ins_output)
         self.sem_output.append(sem_output)
         self.points.append(block_points)
@@ -179,47 +179,40 @@ class BlockMerging:
             self.additional_data.append([None for _ in range(len(block_points))])
 
     @staticmethod
-    def _block_merging(
-        volume,
-        volume_seg,
-        pts,
-        grouplabel,
-        groupseg,
-        gap=1e-3
-    ):
-        overlapgroupcounts = np.zeros([100,300])
+    def _block_merging(volume, volume_seg, pts, grouplabel, groupseg, gap=1e-3):
+        overlapgroupcounts = np.zeros([100, 300])
         groupcounts = np.ones(100)
-        x=(pts[:,0]/gap).astype(np.int32)
-        y=(pts[:,1]/gap).astype(np.int32)
-        z=(pts[:,2]/gap).astype(np.int32)
+        x = (pts[:, 0] / gap).astype(np.int32)
+        y = (pts[:, 1] / gap).astype(np.int32)
+        z = (pts[:, 2] / gap).astype(np.int32)
         for i in range(pts.shape[0]):
-            xx=x[i]
-            yy=y[i]
-            zz=z[i]
+            xx = x[i]
+            yy = y[i]
+            zz = z[i]
             if grouplabel[i] != -1:
-                if volume[xx,yy,zz]!=-1 and volume_seg[xx,yy,zz]==groupseg[grouplabel[i]]:
-                    #overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
+                if volume[xx, yy, zz] != -1 and volume_seg[xx, yy, zz] == groupseg[grouplabel[i]]:
+                    # overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
                     try:
-                        overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
+                        overlapgroupcounts[grouplabel[i], volume[xx, yy, zz]] += 1
                     except:
                         pass
             groupcounts[grouplabel[i]] += 1
 
-        groupcate = np.argmax(overlapgroupcounts,axis=1)
-        maxoverlapgroupcounts = np.max(overlapgroupcounts,axis=1)
+        groupcate = np.argmax(overlapgroupcounts, axis=1)
+        maxoverlapgroupcounts = np.max(overlapgroupcounts, axis=1)
 
         curr_max = np.max(volume)
         for i in range(groupcate.shape[0]):
-            if maxoverlapgroupcounts[i]<7 and groupcounts[i]>30:
+            if maxoverlapgroupcounts[i] < 7 and groupcounts[i] > 30:
                 curr_max += 1
                 groupcate[i] = curr_max
 
         finalgrouplabel = -1 * np.ones(pts.shape[0])
 
         for i in range(pts.shape[0]):
-            if grouplabel[i] != -1 and volume[x[i],y[i],z[i]]==-1:
-                volume[x[i],y[i],z[i]] = groupcate[grouplabel[i]]
-                volume_seg[x[i],y[i],z[i]] = groupseg[grouplabel[i]]
+            if grouplabel[i] != -1 and volume[x[i], y[i], z[i]] == -1:
+                volume[x[i], y[i], z[i]] = groupcate[grouplabel[i]]
+                volume_seg[x[i], y[i], z[i]] = groupseg[grouplabel[i]]
                 finalgrouplabel[i] = groupcate[grouplabel[i]]
         return finalgrouplabel
 
@@ -242,12 +235,12 @@ class BlockMerging:
 
         un = np.unique(scene_ins_label)
         pts_in_pred = [[] for itmp in range(self.num_classes)]
-        group_pred_final:np.ndarray = -1 * np.ones_like(scene_ins_label)
+        group_pred_final: np.ndarray = -1 * np.ones_like(scene_ins_label)
         grouppred_cnt = 0
-        for ig, g in enumerate(un): #each object in prediction
+        for ig, g in enumerate(un):  # each object in prediction
             if g == -1:
                 continue
-            tmp = (scene_ins_label == g)
+            tmp = scene_ins_label == g
             sem_seg_g = int(stats.mode(scene_sem_label[tmp])[0])
             if np.sum(tmp) > 0.25 * self.mean_num_pts_in_group[sem_seg_g]:
                 group_pred_final[tmp] = grouppred_cnt
@@ -266,7 +259,8 @@ class BlockMerging:
         additional_data = additional_data.reshape(-1, shape[2])
         return additional_data
 
-class BatchBlockMerging():
+
+class BatchBlockMerging:
     def __init__(self, num_classes, gap, mean_num_pts_in_group, save_gt=False) -> None:
         self.block_merging_dict: Dict[int, BlockMerging] = {}
         self.num_classes = num_classes
@@ -276,19 +270,17 @@ class BatchBlockMerging():
 
     def create_block_merging(self, room_id):
         self.block_merging_dict[room_id] = BlockMerging(
-            num_classes=self.num_classes,
-            gap=self.gap,
-            mean_num_pts_in_group=self.mean_num_pts_in_group
+            num_classes=self.num_classes, gap=self.gap, mean_num_pts_in_group=self.mean_num_pts_in_group
         )
 
     def append_blocks(
-        self, 
+        self,
         batch_block_points: List[np.ndarray],
         batch_ins_output: List[np.ndarray],
         batch_sem_output: List[np.ndarray],
         batch_ins_seg: List[dict],
         batch_room_id: List[np.ndarray],
-        batch_additional_data:List[np.ndarray]=None
+        batch_additional_data: List[np.ndarray] = None,
     ):
         """store outputs of each block.
         Args:
@@ -296,7 +288,7 @@ class BatchBlockMerging():
             batch_ins_output (List[np.ndarray]): instance labels of batch outputs, [B, N]
             batch_ins_seg (List[dict]): semantic labels per instace index, [B, {instace index: semantic label}]
             batch_room_id (List[np.ndarray]): room ID of each block, [B, N]
-            batch_additional_data (List[np.ndarray]): 
+            batch_additional_data (List[np.ndarray]):
         """
         for idx in range(len(batch_room_id)):
             room_id = batch_room_id[idx][0]
@@ -307,7 +299,7 @@ class BatchBlockMerging():
                 batch_ins_output[idx],
                 batch_sem_output[idx],
                 batch_ins_seg[idx],
-                batch_additional_data[idx]
+                batch_additional_data[idx],
             )
 
     def get_results(self) -> List[np.ndarray]:
@@ -334,7 +326,9 @@ class BlockMergingTracker(SegmentationTracker):
         self._precision = None
         self._recall = None
 
-        self.blcok_merging_list = BatchBlockMerging(self._num_classes, self._dataset.gap, self._dataset.mean_num_pts_in_group)
+        self.blcok_merging_list = BatchBlockMerging(
+            self._num_classes, self._dataset.gap, self._dataset.mean_num_pts_in_group
+        )
         self.gt_ins_labels = []
 
         self._tpsins = [[] for itmp in range(self._num_classes)]
@@ -350,8 +344,8 @@ class BlockMergingTracker(SegmentationTracker):
         if self._stage == "train" or not full_res:
             return
 
-        inputs:Data = model.get_input()
-        xyz_list = inputs.x.transpose(1,2)[:, :, 3:] # normalized xyz in a room
+        inputs: Data = model.get_input()
+        xyz_list = inputs.x.transpose(1, 2)[:, :, 3:]  # normalized xyz in a room
 
         ins_outputs, ins_seg, room_id_list = model.get_output_for_BlockMerging()
         ins_targets = model.get_labels_for_BlockMerging()
@@ -366,12 +360,11 @@ class BlockMergingTracker(SegmentationTracker):
 
         # Get additional data to evaluate network (number of points, 3)
         # `3` is [instance gt label, semantic output, semantic gt label]
-        additional_data = np.concatenate([
-            ins_targets[:, :, np.newaxis],
-            sem_targets[:, :, np.newaxis]
-        ], axis=-1)
+        additional_data = np.concatenate([ins_targets[:, :, np.newaxis], sem_targets[:, :, np.newaxis]], axis=-1)
 
-        self.blcok_merging_list.append_blocks(xyz_list, ins_outputs, sem_outputs, ins_seg, room_id_list, additional_data)
+        self.blcok_merging_list.append_blocks(
+            xyz_list, ins_outputs, sem_outputs, ins_seg, room_id_list, additional_data
+        )
 
     def _ins_compute_metrics(self, sem_outputs, ins_outputs, sem_gt, ins_gt):
         mask = ins_gt != self._ignore_label
@@ -387,14 +380,14 @@ class BlockMergingTracker(SegmentationTracker):
         for ig, g in enumerate(un):  # each object in prediction
             if g == -1:
                 continue
-            tmp = (ins_outputs == g)
+            tmp = ins_outputs == g
             sem_seg_i = int(stats.mode(sem_outputs[tmp])[0])
             pts_in_pred[sem_seg_i] += [tmp]
 
         un = np.unique(ins_gt)
         pts_in_gt = [[] for itmp in range(self._num_classes)]
         for ig, g in enumerate(un):
-            tmp = (ins_gt == g)
+            tmp = ins_gt == g
             sem_seg_i = int(stats.mode(sem_gt[tmp])[0])
             pts_in_gt[sem_seg_i] += [tmp]
 
@@ -405,17 +398,16 @@ class BlockMergingTracker(SegmentationTracker):
             mean_weighted_cov = 0
             num_gt_point = 0
             for ig, ins_gt in enumerate(pts_in_gt[i_sem]):
-                ovmax = 0.
+                ovmax = 0.0
                 num_ins_gt_point = np.sum(ins_gt)
                 num_gt_point += num_ins_gt_point
                 for ip, ins_pred in enumerate(pts_in_pred[i_sem]):
-                    union = (ins_pred | ins_gt)
-                    intersect = (ins_pred & ins_gt)
+                    union = ins_pred | ins_gt
+                    intersect = ins_pred & ins_gt
                     iou = float(np.sum(intersect)) / np.sum(union)
 
                     if iou > ovmax:
                         ovmax = iou
-                        ipmax = ip
 
                 sum_cov += ovmax
                 mean_weighted_cov += ovmax * num_ins_gt_point
@@ -427,28 +419,26 @@ class BlockMergingTracker(SegmentationTracker):
                 mean_weighted_cov /= num_gt_point
                 self._all_mean_weighted_cov[i_sem].append(mean_weighted_cov)
 
-
         # instance precision & recall
         for i_sem in range(self._num_classes):
-            tp = [0.] * len(pts_in_pred[i_sem])
-            fp = [0.] * len(pts_in_pred[i_sem])
-            gtflag = np.zeros(len(pts_in_gt[i_sem]))
+            tp = [0.0] * len(pts_in_pred[i_sem])
+            fp = [0.0] * len(pts_in_pred[i_sem])
+            np.zeros(len(pts_in_gt[i_sem]))
             self._total_gt_ins[i_sem] += len(pts_in_gt[i_sem])
 
             for ip, ins_pred in enumerate(pts_in_pred[i_sem]):
-                ovmax = -1.
+                ovmax = -1.0
 
                 for ig, ins_gt in enumerate(pts_in_gt[i_sem]):
-                    union = (ins_pred | ins_gt)
-                    intersect = (ins_pred & ins_gt)
+                    union = ins_pred | ins_gt
+                    intersect = ins_pred & ins_gt
                     iou = float(np.sum(intersect)) / np.sum(union)
 
                     if iou > ovmax:
                         ovmax = iou
-                        igmax = ig
 
                 if ovmax >= at:
-                        tp[ip] = 1  # true
+                    tp[ip] = 1  # true
                 else:
                     fp[ip] = 1  # false positive
 
@@ -467,12 +457,7 @@ class BlockMergingTracker(SegmentationTracker):
                 room_additional_data = all_room_additional_data[room_idx]
                 room_ins_targets = room_additional_data[:, 0]
                 room_sem_targets = room_additional_data[:, 1]
-                self._ins_compute_metrics(
-                    room_sem_outputs,
-                    room_ins_outputs,
-                    room_sem_targets,
-                    room_ins_targets
-                )
+                self._ins_compute_metrics(room_sem_outputs, room_ins_outputs, room_sem_targets, room_ins_targets)
 
             mucov = np.zeros(self._num_classes)
             mwcov = np.zeros(self._num_classes)
@@ -508,40 +493,3 @@ class BlockMergingTracker(SegmentationTracker):
                 metrics["{}_mwcov".format(self._stage)] = self._mwcov
                 metrics["{}_mucov".format(self._stage)] = self._mucov
         return metrics
-
-# inference_transform = Compose([
-#     FixedPoints(4096, replace=True),
-# ])
-# Size of train_dataset = 16733
-# Size of test_dataset = 6852
-# Size of val_dataset = 0
-# Batch size = 24
-# [2021-09-05 08:56:42,379][torch_points3d.datasets.base_dataset][INFO] - Available stage selection datasets:  ['test'] 
-# [2021-09-05 08:56:42,379][torch_points3d.datasets.base_dataset][INFO] - The models will be selected using the metrics on following dataset:  test 
-# [2021-09-05 08:56:42,385][torch_points3d.metrics.base_tracker][INFO] - Access tensorboard with the following command <tensorboard --logdir=/home/coder/workspace/code/myrepo/torch-points3d/outputs/2021-09-05/08-56-35/tensorboard>
-# [2021-09-05 08:56:43,862][torch_points3d.trainer][INFO] - EPOCH 1 / 100
-# 100%|█| 698/698 [06:37<00:00,  1.75it/s, data_loading=0.017, iteration=0.366, train_acc=72.26, train_instance_los
-# /home/coder/anaconda3/envs/tp3v1/lib/python3.7/site-packages/numpy/core/fromnumeric.py:3373: RuntimeWarning: Mean of empty slice.
-#   out=out, **kwargs)
-# /home/coder/anaconda3/envs/tp3v1/lib/python3.7/site-packages/numpy/core/_methods.py:170: RuntimeWarning: invalid value encountered in double_scalars
-#   ret = ret.dtype.type(ret / rcount)
-# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:492: RuntimeWarning: invalid value encountered in double_scalars
-#   rec = tp / self._total_gt_ins[i_sem]
-# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:493: RuntimeWarning: invalid value encountered in double_scalars
-#   prec = tp / (tp + fp)
-# [2021-09-05 09:03:21,782][torch_points3d.trainer][INFO] - Learning rate = 0.001000
-# 100%|█| 286/286 [13:11<00:00,  2.77s/it, test_acc=78.34, test_instance_loss=1.384, test_macc=43.57, test_miou=34.
-# /home/coder/workspace/code/myrepo/torch-points3d/torch_points3d/metrics/s3dis_tracker.py:493: RuntimeWarning: invalid value encountered in double_scalars
-
-# [2021-09-05 09:30:21,321][torch_points3d.metrics.base_tracker][INFO] - ==================================================
-# [2021-09-05 09:30:21,321][torch_points3d.metrics.base_tracker][INFO] -     test_instance_loss = 1.3848291635513306
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_semantic_loss = 0.8313604593276978
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_acc = 78.34280607509669
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_macc = 43.57548692027422
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_miou = 34.995921031746995
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_miou_per_class = {0: '85.40', 1: '95.70', 2: '64.34', 3: '0.00', 4: '0.00', 5: '30.23', 6: '12.51', 7: '50.37', 8: '55.49', 9: '27.35', 10: '0.00', 11: '0.00', 12: '33.56'}
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_precision = nan
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_recall = 0.2023353667440993
-# [2021-09-05 09:30:21,322][torch_points3d.metrics.base_tracker][INFO] -     test_mwcov = 0.2897675672666181
-# [2021-09-05 09:30:21,323][torch_points3d.metrics.base_tracker][INFO] -     test_mucov = 0.23577564943359372
-# [2021-09-05 09:30:21,323][torch_points3d.metrics.base_tracker][INFO] - ==================================================

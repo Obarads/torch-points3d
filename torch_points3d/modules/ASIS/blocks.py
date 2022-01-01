@@ -21,11 +21,11 @@ from torch_points3d.core.spatial_ops.neighbour_finder import DenseKNNNeighbourFi
 
 # This class is based on `BaseDenseConvolutionUp`
 class DenseFPModules(BaseConvolution):
-    """Parallel FP Module.
-    """
+    """Parallel FP Module."""
+
     def __init__(self, up_conv_nn, bn=True, bias=False, activation=nn.ReLU(), **kwargs):
         super(DenseFPModules, self).__init__(None, None, **kwargs)
-        
+
         # semantic seg. branch layer
         self.sem_decoder_layer = DenseFPModule(up_conv_nn, bn, bias, activation=activation)
         # instance seg. branch layer
@@ -35,12 +35,12 @@ class DenseFPModules(BaseConvolution):
         """
         Args:
             data (tuple): previous layer output and skip data (data_dec, data_skip)
-        
+
         Note:
-            data_dec (Tuple or torch_geometric): If data_dec is a tuple, 
-                data_dec contains sem_data and ins_data because data_dec is a 
-                decoder layer output. 
-                If data_dec is a torch_geometric.data.Data, data_dec is 
+            data_dec (Tuple or torch_geometric): If data_dec is a tuple,
+                data_dec contains sem_data and ins_data because data_dec is a
+                decoder layer output.
+                If data_dec is a torch_geometric.data.Data, data_dec is
                 last encoder layer output.
             data_skip: skip connection data
         """
@@ -65,29 +65,24 @@ class DenseFPModules(BaseConvolution):
 
 
 class ASIS(BaseModule):
-    def __init__(self, num_sem_in_features, num_sem_out_features, 
-                 num_ins_in_features, num_ins_out_features, k):
+    def __init__(self, num_sem_in_features, num_sem_out_features, num_ins_in_features, num_ins_out_features, k):
         super(ASIS, self).__init__()
 
         # sem branch
         # input: F_ISEM, output: P_SEM
         self.sem_pred_fc = nn.Sequential(
-            nn.Dropout(inplace=True),
-            nn.Conv1d(num_sem_in_features, num_sem_out_features, 1)
+            nn.Dropout(inplace=True), nn.Conv1d(num_sem_in_features, num_sem_out_features, 1)
         )
 
         # Adaptation
         self.adaptation = nn.Sequential(
-            nn.Conv1d(num_sem_in_features, num_ins_in_features, 1),
-            nn.BatchNorm1d(num_ins_in_features),
-            nn.ReLU()
+            nn.Conv1d(num_sem_in_features, num_ins_in_features, 1), nn.BatchNorm1d(num_ins_in_features), nn.ReLU()
         )
 
         # # ins branch
         # input: F_SINS, output: E_INS
         self.ins_emb_fc = nn.Sequential(
-            nn.Dropout(inplace=True),
-            nn.Conv1d(num_ins_in_features, num_ins_out_features, 1)
+            nn.Dropout(inplace=True), nn.Conv1d(num_ins_in_features, num_ins_out_features, 1)
         )
 
         # kNN
@@ -103,7 +98,7 @@ class ASIS(BaseModule):
 
         # for P_SEM
         # (B, C, N) -> (B, N, C)
-        e_ins = e_ins.transpose(1,2).contiguous()
+        e_ins = e_ins.transpose(1, 2).contiguous()
         # get indices (B, N, k)
         nn_idx = self.neighbour_finder(e_ins, e_ins)
         # get knn features (B, C, N, k)
@@ -112,5 +107,3 @@ class ASIS(BaseModule):
         p_sem = self.sem_pred_fc(f_isem)
 
         return p_sem, e_ins
-
-

@@ -1,5 +1,4 @@
 import logging
-from numpy.lib.shape_base import tile
 
 from scipy import stats
 import math
@@ -37,36 +36,36 @@ log = logging.getLogger(__name__)
 #         dense.append(Data[data_idx])
 #     return dense
 
+
 def _time_watcher(previous_time=None, print_key=""):
     current_time = time.time()
     if previous_time is None:
-        print('time_watcher start')
+        print("time_watcher start")
     else:
-        print('{}: {}'.format(print_key, current_time - previous_time))
+        print("{}: {}".format(print_key, current_time - previous_time))
     return current_time
 
-def _t2n(torch_tensor:torch.Tensor) -> np.ndarray:
-    """torch.Tensor to numpy.ndarray
-    """
+
+def _t2n(torch_tensor: torch.Tensor) -> np.ndarray:
+    """torch.Tensor to numpy.ndarray"""
     return torch_tensor.detach().cpu().numpy()
 
-def gaussian(d:torch.FloatTensor, bw:float) -> torch.FloatTensor:
-    return torch.exp(-0.5*((d/bw))**2) / (bw*math.sqrt(2*math.pi))
 
-def flat(d:torch.FloatTensor, bw:float) -> torch.FloatTensor:
+def gaussian(d: torch.FloatTensor, bw: float) -> torch.FloatTensor:
+    return torch.exp(-0.5 * ((d / bw)) ** 2) / (bw * math.sqrt(2 * math.pi))
+
+
+def flat(d: torch.FloatTensor, bw: float) -> torch.FloatTensor:
     res: torch.BoolTensor = d < bw
     return res.to(dtype=d.dtype)
 
+
 class TorchMeanShift:
-    """https://github.com/fastai/courses/blob/master/deeplearning2/meanshift.ipynb
-    """
+    """https://github.com/fastai/courses/blob/master/deeplearning2/meanshift.ipynb"""
 
-    supported_kernels = {
-        'gaussian': gaussian,
-        'flat': flat
-    }
+    supported_kernels = {"gaussian": gaussian, "flat": flat}
 
-    def __init__(self, bandwidth, max_iter=300, kernel='flat') -> None:
+    def __init__(self, bandwidth, max_iter=300, kernel="flat") -> None:
         super().__init__()
         self.bandwidth = bandwidth
         self.max_iter = max_iter
@@ -74,17 +73,18 @@ class TorchMeanShift:
         if kernel in self.supported_kernels:
             self.kernel = self.supported_kernels[kernel]
         else:
-            raise NotImplementedError('Supported kernels are {}, actually {}'.format(self.supported_kernels.keys(), kernel))
+            raise NotImplementedError(
+                "Supported kernels are {}, actually {}".format(self.supported_kernels.keys(), kernel)
+            )
 
         self.labels_ = None
         self.cluster_all = True
         self.n_iter_ = 0
 
     @staticmethod
-    def _get_pairwise_distances(a,b) -> torch.FloatTensor:
-        """Get a pairwise distance matrix.
-        """
-        return torch.sqrt(((a.unsqueeze(0) - b.unsqueeze(1))**2).sum(2)).T
+    def _get_pairwise_distances(a, b) -> torch.FloatTensor:
+        """Get a pairwise distance matrix."""
+        return torch.sqrt(((a.unsqueeze(0) - b.unsqueeze(1)) ** 2).sum(2)).T
 
     @staticmethod
     def _get_radius_nn_mask(X1, X2, radius, including_myself=True) -> torch.BoolTensor:
@@ -102,7 +102,7 @@ class TorchMeanShift:
             mask = MeanshiftG._get_radius_nn_mask(X, X, 5)
         """
         dist = TorchMeanShift._get_pairwise_distances(X1, X2)
-        radius_nn_mask:torch.tensor = dist < radius
+        radius_nn_mask: torch.tensor = dist < radius
 
         # If X1.shape=X2.shape and including_myself is True, this function does not include myself in raidus NN for the mean calculation.
         # But, when there is no neighborhood, nan may be mixed.
@@ -114,7 +114,9 @@ class TorchMeanShift:
         return radius_nn_mask
 
     @staticmethod
-    def _get_radius_nn_mean(X:torch.tensor, radius:float, including_myself=True) -> Tuple[torch.FloatTensor, torch.BoolTensor]:
+    def _get_radius_nn_mean(
+        X: torch.tensor, radius: float, including_myself=True
+    ) -> Tuple[torch.FloatTensor, torch.BoolTensor]:
         """Get mean of nearest neighbors in radius.
         Args:
             X (torch.tensor) : inputs (N, C)
@@ -138,18 +140,18 @@ class TorchMeanShift:
         X = torch.tile(X[:, None, :], (1, N, 1))
         X = X.transpose(0, 1)
         X[radius_nn_mask == False] = 0
-        radius_nn_mean:torch.FloatTensor = X.sum(1) / radius_nn_mask.sum(-1)[:, None]
+        radius_nn_mean: torch.FloatTensor = X.sum(1) / radius_nn_mask.sum(-1)[:, None]
 
         return radius_nn_mean, radius_nn_mask
 
-    def _create_labels(self, X:torch.tensor, original_X:torch.tensor):
+    def _create_labels(self, X: torch.tensor, original_X: torch.tensor):
         device = X.device
 
         # get all_res (sklearn)
         radius_nn_mean, radius_nn_mask = self._get_radius_nn_mean(X, self.bandwidth)
         num_nn = torch.sum(radius_nn_mask, dim=1)
 
-        num_nn_mask = num_nn > 0 # i.e. len(points_within) > 0
+        num_nn_mask = num_nn > 0  # i.e. len(points_within) > 0
         num_nn = num_nn[num_nn_mask]
         radius_nn_mean = radius_nn_mean[num_nn_mask]
 
@@ -168,7 +170,7 @@ class TorchMeanShift:
                 unique[neighbor_idxs] = 0
                 unique[i] = 1  # leave the current point as unique
         cluster_centers = sorted_centers[unique]
-        
+
         # ASSIGN LABELS: a point belongs to the cluster that it is closest to
         dist = self._get_pairwise_distances(original_X, cluster_centers)
         idxs = torch.argmin(dist, dim=1)
@@ -184,7 +186,7 @@ class TorchMeanShift:
         self.cluster_centers_ = _t2n(cluster_centers)
         self.labels_ = _t2n(labels)
 
-    def fit(self, X:torch.FloatTensor):
+    def fit(self, X: torch.FloatTensor):
         original_X = deepcopy(X)
         stop_thresh = 1e-3 * self.bandwidth
 
@@ -196,7 +198,7 @@ class TorchMeanShift:
                 X_new = num / weight.sum(1)[:, None]
 
                 # check convergence
-                shift = torch.abs(X_new - X).sum()/torch.abs(original_X.sum())
+                shift = torch.abs(X_new - X).sum() / torch.abs(original_X.sum())
                 X = X_new
                 self.n_iter_ += 1
                 if shift < stop_thresh:
@@ -206,8 +208,10 @@ class TorchMeanShift:
     def predict(self):
         raise NotImplementedError()
 
+
 # from sklearn.cluster import MeanShift
 MeanShift = TorchMeanShift
+
 
 class PointNet2ASIS(UnetBasedModel):
     def __init__(self, option, model_type, dataset, modules):
@@ -232,14 +236,10 @@ class PointNet2ASIS(UnetBasedModel):
         decoder_last_layer_dim = option.up_conv.up_conv_nn[-1][-1]
         asis_opt = option.asis
         self.sem_layer = nn.Sequential(
-            nn.Conv1d(decoder_last_layer_dim, asis_opt.input_dim, 1),
-            nn.BatchNorm1d(asis_opt.input_dim),
-            nn.ReLU()
+            nn.Conv1d(decoder_last_layer_dim, asis_opt.input_dim, 1), nn.BatchNorm1d(asis_opt.input_dim), nn.ReLU()
         )
         self.ins_layer = nn.Sequential(
-            nn.Conv1d(decoder_last_layer_dim, asis_opt.input_dim, 1),
-            nn.BatchNorm1d(asis_opt.input_dim),
-            nn.ReLU()
+            nn.Conv1d(decoder_last_layer_dim, asis_opt.input_dim, 1), nn.BatchNorm1d(asis_opt.input_dim), nn.ReLU()
         )
 
         # Build ASIS modeule.
@@ -248,7 +248,7 @@ class PointNet2ASIS(UnetBasedModel):
             num_sem_out_features=self._num_classes,
             num_ins_in_features=asis_opt.input_dim,
             num_ins_out_features=asis_opt.ins_output_dim,
-            k=asis_opt.k
+            k=asis_opt.k,
         )
 
         # Define Discriminative loss.
@@ -259,7 +259,7 @@ class PointNet2ASIS(UnetBasedModel):
             alpha=dl_opt.var,
             beta=dl_opt.dist,
             gamma=dl_opt.reg,
-            norm_p=dl_opt.norm_p
+            norm_p=dl_opt.norm_p,
         )
         self.cross_entropy_loss = nn.CrossEntropyLoss(ignore_index=IGNORE_LABEL)
 
@@ -290,7 +290,7 @@ class PointNet2ASIS(UnetBasedModel):
             x = data.x.transpose(1, 2).contiguous().to(torch.float32)
         else:
             x = None
-        self.input:Data = Data(x=x, pos=data.pos.to(torch.float32)).to(device)
+        self.input: Data = Data(x=x, pos=data.pos.to(torch.float32)).to(device)
 
         # sem labels
         self.labels: torch.tensor = data.y.to(device)
@@ -301,21 +301,23 @@ class PointNet2ASIS(UnetBasedModel):
         # self.batch_idx = torch.arange(0, data.pos.shape[0]).view(-1, 1).repeat(1, data.pos.shape[1]).view(-1)
         if self._use_category:
             self.category = data.categor
-        
+
         # Get room ID
         self.room_id_list = data.area_room
 
     def forward(self, epoch=-1, *args, **kwargs):
         output, embed_ins = self._network(self.input)
-        self.output = output.transpose(1,2) # (B, NUM_CLASSES, N) -> (B, N, NUM_CLASSES) for Tracker
-        self.embed_ins = embed_ins # (B, ins_output_dim, N)
+        self.output = output.transpose(1, 2)  # (B, NUM_CLASSES, N) -> (B, N, NUM_CLASSES) for Tracker
+        self.embed_ins = embed_ins  # (B, ins_output_dim, N)
 
         if not self.model.training:
             ins_output_labels = []
             ins_seg_list = []
 
-            sem_output_labels = torch.argmax(self.output, dim=-1) # Get prediction semantic labels (B, N, NUM_CLASSES) -> (B, N)
-            sem_output_labels = sem_output_labels.cpu().detach().numpy() # torch to numpy
+            sem_output_labels = torch.argmax(
+                self.output, dim=-1
+            )  # Get prediction semantic labels (B, N, NUM_CLASSES) -> (B, N)
+            sem_output_labels = sem_output_labels.cpu().detach().numpy()  # torch to numpy
             # embed_inses = self.embed_ins.cpu().detach().numpy() # torch to numpy
             embed_inses = self.embed_ins
 
@@ -323,12 +325,11 @@ class PointNet2ASIS(UnetBasedModel):
                 pred_sem_label = sem_output_labels[block_idx]
                 embed_ins = embed_inses[block_idx]
 
-                num_clusters, pred_ins_label, cluster_centers = \
-                    self._cluster(embed_ins)
+                num_clusters, pred_ins_label, cluster_centers = self._cluster(embed_ins)
                 ins_seg = {}
                 for idx_cluster in range(num_clusters):
-                    tmp = (pred_ins_label == idx_cluster)
-                    if np.sum(tmp) != 0: # add (for a cluster of zero element.)
+                    tmp = pred_ins_label == idx_cluster
+                    if np.sum(tmp) != 0:  # add (for a cluster of zero element.)
                         a = stats.mode(pred_sem_label[tmp])[0]
                         estimated_seg = int(a)
                         ins_seg[idx_cluster] = estimated_seg
@@ -366,20 +367,12 @@ class PointNet2ASIS(UnetBasedModel):
         return num_clusters, labels, cluster_centers
 
     def _compute_loss(self):
-        self.semantic_loss = self.cross_entropy_loss(
-            self.output.transpose(1, 2),
-            self.labels
-        )
-        self.loss = self.opt.loss.cross_entropy_loss.loss_weights * \
-            self.semantic_loss
+        self.semantic_loss = self.cross_entropy_loss(self.output.transpose(1, 2), self.labels)
+        self.loss = self.opt.loss.cross_entropy_loss.loss_weights * self.semantic_loss
 
         # Instance loss
-        self.instance_loss = self.discriminative_loss(
-            self.embed_ins,
-            self.ins_labels
-        )
-        self.loss += self.opt.loss.discriminative_loss.loss_weights * \
-            self.instance_loss
+        self.instance_loss = self.discriminative_loss(self.embed_ins, self.ins_labels)
+        self.loss += self.opt.loss.discriminative_loss.loss_weights * self.instance_loss
 
     def backward(self):
         """Calculate losses, gradients, and update network weights; called in every training iteration"""
