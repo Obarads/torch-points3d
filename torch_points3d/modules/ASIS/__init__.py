@@ -1,1 +1,1 @@
-from .blocks import *
+from .dense import *
