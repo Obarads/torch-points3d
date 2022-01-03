@@ -127,8 +127,35 @@ class S3DISTracker(SegmentationTracker):
 
 
 class BlockMerging:
-    def __init__(self, num_classes: int, gap: float = 5e-3, mean_num_pts_in_group: np.ndarray = None):
+    """This BlockMerging perform BlockMerging algorithm on a single room.
+
+    Parameters
+    ----------
+    num_classes: int
+        number of classes
+    room_ranges: list
+        XYZ minimum and maximum coordinates of a room (shape: (3, 2))
+    gaps: list
+        XYZ gaps (shape: (3))
+    mean_num_pts_in_group: list
+        The threshold for the number of points defined for each class. Points in groups that do not exceed this threshold will be assigned to no affiliation (-1). (shape: (num_classes))
+
+    Notes
+    -----
+    room_ranges and gaps is related to the XYZ of grid V (from Appendix B of arXiv:1711.08588) as follows:
+        X-axis V size = (room_ranges[0][1] - room_ranges[0][0]) / gaps[0]
+        Y-axis V size = (room_ranges[1][1] - room_ranges[1][0]) / gaps[1]
+        Z-axis V size = (room_ranges[2][1] - room_ranges[2][0]) / gaps[2].
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        gap: float = 5e-3,
+        mean_num_pts_in_group: List[int] = None,
+    ):
         self.num_classes = num_classes
+        # self.room_ranges = room_ranges
         self.gap = gap
         if mean_num_pts_in_group is None:
             self.mean_num_pts_in_group = np.ones(self.num_classes, dtype=np.float32)
@@ -139,14 +166,13 @@ class BlockMerging:
 
     def init_data(self):
         volume_num = int(1.0 / self.gap) + 1
-        self.volume = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
-        self.volume_seg = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
+        self.volume: np.ndarray = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
+        self.volume_seg: np.ndarray = -1 * np.ones([volume_num, volume_num, volume_num]).astype(np.int32)
 
-        self.ins_output = []
-        self.sem_output = []
-        self.points = []
-
-        self.additional_data = []
+        self.ins_output: List[np.ndarray] = []
+        self.sem_output: List[np.ndarray] = []
+        self.points: List[np.ndarray] = []
+        self.additional_data: List[np.ndarray] = []
 
     def append_block(
         self,
@@ -261,7 +287,7 @@ class BlockMerging:
 
 
 class BatchBlockMerging:
-    def __init__(self, num_classes, gap, mean_num_pts_in_group, save_gt=False) -> None:
+    def __init__(self, num_classes, gap, mean_num_pts_in_group: np.ndarray = None, save_gt=False) -> None:
         self.block_merging_dict: Dict[int, BlockMerging] = {}
         self.num_classes = num_classes
         self.gap = gap
@@ -331,10 +357,10 @@ class BlockMergingTracker(SegmentationTracker):
         )
         self.gt_ins_labels = []
 
-        self._tpsins = [[] for itmp in range(self._num_classes)]
-        self._fpsins = [[] for itmp in range(self._num_classes)]
-        self._all_mean_cov = [[] for itmp in range(self._num_classes)]
-        self._all_mean_weighted_cov = [[] for itmp in range(self._num_classes)]
+        self._tpsins = [[] for _ in range(self._num_classes)]
+        self._fpsins = [[] for _ in range(self._num_classes)]
+        self._all_mean_cov = [[] for _ in range(self._num_classes)]
+        self._all_mean_weighted_cov = [[] for _ in range(self._num_classes)]
         self._total_gt_ins = np.zeros(self._num_classes)
 
     def track(self, model: model_interface.TrackerInterface, full_res=False, **kwargs):

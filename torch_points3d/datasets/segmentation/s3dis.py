@@ -911,7 +911,20 @@ class S3DISFusedDataset(BaseDataset):
 
 
 class S3DIS1x1Ins(InMemoryDataset):
-    """New dataset"""
+    """ S3DIS dataset with 1m x 1m patches and instances (for dense models of instance segmentation).
+
+    Parameters
+    ----------
+    root: str
+        path to the directory where the data will be saved
+    test_area: int
+        number between 1 and 6 that denotes the area used for testing
+    train: bool
+        Is this a train split or not
+    transform:
+    pre_transform:
+    pre_filter:
+    """
 
     form_url = (
         "https://docs.google.com/forms/d/e/1FAIpQLScDimvNMCGhy_rmBA2gHfDu3naktRm6A8BPwAWWDv-Uhm6Shw/viewform?c=0&w=1"
@@ -926,27 +939,17 @@ class S3DIS1x1Ins(InMemoryDataset):
     num_points = 4096
     block_size = 1.0
     stride = 0.5
-    valid_slice_types = ["block", "room"]
 
-    def __init__(
-        self, root, test_area=6, train=True, slice_type="block", transform=None, pre_transform=None, pre_filter=None
-    ):
+    def __init__(self, root, test_area=6, train=True, transform=None, pre_transform=None, pre_filter=None):
         assert test_area >= 1 and test_area <= 6
         self.test_area = test_area
-        assert slice_type in self.valid_slice_types
-        self.slice_type = slice_type
 
         super().__init__(root, transform, pre_transform, pre_filter)
         path = self.processed_paths[0] if train else self.processed_paths[1]
 
         self.data, slices = torch.load(path)
-        block_slices, room_slices = slices
-        if slice_type == "block":
-            self.slices = block_slices
-        elif slice_type == "room":
-            self.slices = room_slices
-        else:
-            raise ValueError("slice_type is any of these: {}".format(self.valid_slice_types))
+        block_slices, _ = slices
+        self.slices = block_slices
 
     @property
     def raw_file_names(self):
@@ -999,11 +1002,11 @@ class S3DIS1x1Ins(InMemoryDataset):
             area_num = int(area[-1]) - 1
             pt_path = osp.join(self.processed_dir, area + ".pt")
 
-            ### Check area pt file
-            if os.path.exists(pt_path):  ### If Area_X.pt is found
+            ### Check area pt file (Area_X.pt)
+            if os.path.exists(pt_path):
                 area_data_list[area_num] = torch.load(pt_path)
                 print("Load preprocessed data ({}.pt)".format(area))
-            else:  ### If Area_X.pt is not found
+            else:
                 ### Get file paths of Area_X
                 print("Create preprocessed data ({}.pt)".format(area))
                 file_paths = [
@@ -1027,9 +1030,9 @@ class S3DIS1x1Ins(InMemoryDataset):
 
                     ### Split single room data into blocks.
                     points, sem_labels, ins_labels = room2blocks_plus_normalized(
-                        t2n(torch.cat([modified_xyz, rgb_norm], dim=1)),
-                        t2n(semantic_labels),
-                        t2n(instance_labels),
+                        torch.cat([modified_xyz, rgb_norm], dim=1).cpu().detach().numpy(),
+                        semantic_labels.cpu().detach().numpy(),
+                        instance_labels.cpu().detach().numpy(),
                         self.num_points,
                         block_size=self.block_size,
                         stride=self.stride,
@@ -1103,19 +1106,11 @@ class S3DIS1x1InsDataset(BaseDataset):
         self.gap = dataset_opt.gap
 
         self.train_dataset = S3DIS1x1Ins(
-            self._data_path,
-            test_area=self.dataset_opt.fold,
-            train=True,
-            slice_type="block",
-            transform=self.train_transform,
+            self._data_path, test_area=self.dataset_opt.fold, train=True, transform=self.train_transform,
         )
 
         self.test_dataset = S3DIS1x1Ins(
-            self._data_path,
-            test_area=self.dataset_opt.fold,
-            train=False,
-            slice_type="block",
-            transform=self.train_transform,
+            self._data_path, test_area=self.dataset_opt.fold, train=False, transform=self.train_transform,
         )
 
         if dataset_opt.class_weight_method:
