@@ -126,7 +126,7 @@ class PointNet2ASIS(UnetBasedModel):
         # Get room ID
         self.room_id_list = data.area_room
 
-    def forward(self, epoch=-1, *args, **kwargs):
+    def forward(self, *args, **kwargs):
         output, embed_ins = self._network(self.input)
         self.output = output.transpose(1, 2)  # (B, NUM_CLASSES, N) -> (B, N, NUM_CLASSES) for Tracker
         self.embed_ins = embed_ins  # (B, ins_output_dim, N)
@@ -157,8 +157,8 @@ class PointNet2ASIS(UnetBasedModel):
                 ins_output_labels.append(pred_ins_label)
                 ins_seg_list.append(ins_seg)
 
-                self.ins_output_labels = ins_output_labels
-                self.ins_seg_list = ins_seg_list
+            self.ins_output_labels = ins_output_labels
+            self.ins_seg_list = ins_seg_list
 
         return self.output
 

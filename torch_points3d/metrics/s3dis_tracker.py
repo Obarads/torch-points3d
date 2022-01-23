@@ -206,6 +206,81 @@ class BlockMerging:
 
     @staticmethod
     def _block_merging(volume, volume_seg, pts, grouplabel, groupseg, gap=1e-3):
+        # num_groups = max(groupseg) + 1
+
+        # np_groupseg = np.zeros(num_groups, dtype=np.int32)
+        # for key in groupseg:
+        #     np_groupseg[key] = groupseg[key]
+
+        # groupseg = np_groupseg
+        # overlapgroupcounts = np.zeros([100, 300])
+        # groupcounts = np.ones(100)
+        # xyz = (pts / gap).astype(np.int32)
+        # # x = (pts[:, 0] / gap).astype(np.int32)
+        # # y = (pts[:, 1] / gap).astype(np.int32)
+        # # z = (pts[:, 2] / gap).astype(np.int32)
+
+        # xx = xyz[:, 0]
+        # yy = xyz[:, 1]
+        # zz = xyz[:, 2]
+
+        # grouplabel_mask = grouplabel != -1
+        # volume_mask = volume[xx, yy, zz] != -1
+        # volume_seg_mask = volume_seg[xx, yy, zz] == groupseg[grouplabel]
+        # overlap_mask = grouplabel_mask & volume_mask & volume_seg_mask
+
+        # xx_mask = xyz[overlap_mask, 0]
+        # yy_mask = xyz[overlap_mask, 1]
+        # zz_mask = xyz[overlap_mask, 2]
+
+        # overlapgroupcounts[grouplabel[overlap_mask], volume[xx_mask, yy_mask, zz_mask]] += 1
+        # groupcounts[grouplabel] += 1
+
+        # # for i in range(pts.shape[0]):
+        # #     # xx = x[i]
+        # #     # yy = y[i]
+        # #     # zz = z[i]
+        # #     if grouplabel[i] != -1:
+        # #         if volume[xx, yy, zz] != -1 and volume_seg[xx, yy, zz] == groupseg[grouplabel[i]]:
+        # #             # overlapgroupcounts[grouplabel[i],volume[xx,yy,zz]] += 1
+        # #             try:
+        # #                 overlapgroupcounts[grouplabel[i], volume[xx, yy, zz]] += 1
+        # #             except:
+        # #                 pass
+        # #     groupcounts[grouplabel[i]] += 1
+
+        # groupcate = np.argmax(overlapgroupcounts, axis=1)
+        # maxoverlapgroupcounts = np.max(overlapgroupcounts, axis=1)
+
+        # curr_max = np.max(volume)
+        # # for i in range(groupcate.shape[0]):
+        # #     if maxoverlapgroupcounts[i] < 7 and groupcounts[i] > 30:
+        # #         curr_max += 1
+        # #         groupcate[i] = curr_max
+
+        # maxoverlapgroupcounts_mask = maxoverlapgroupcounts < 7
+        # groupcounts_mask = groupcounts > 30
+        # groupcate_mask = maxoverlapgroupcounts_mask & groupcounts_mask
+        # curr_max_range = np.arange(curr_max, curr_max + np.sum(groupcate_mask))
+        # groupcate[groupcate_mask] = curr_max_range
+
+        # finalgrouplabel = -1 * np.ones(pts.shape[0])
+
+        # volume_mask_2 = volume[xx, yy, zz] == -1
+        # update_mask = grouplabel_mask & volume_mask_2
+        # xx_update_mask = xyz[update_mask, 0]
+        # yy_update_mask = xyz[update_mask, 1]
+        # zz_update_mask = xyz[update_mask, 2]
+        # volume[xx_update_mask, yy_update_mask, zz_update_mask] = groupcate[grouplabel[update_mask]]
+        # volume_seg[xx_update_mask, yy_update_mask, zz_update_mask] = groupseg[grouplabel[update_mask]]
+        # finalgrouplabel[update_mask] = groupcate[grouplabel[update_mask]]
+
+        # # for i in range(pts.shape[0]):
+        # #     if grouplabel[i] != -1 and volume[x[i], y[i], z[i]] == -1:
+        # #         volume[x[i], y[i], z[i]] = groupcate[grouplabel[i]]
+        # #         volume_seg[x[i], y[i], z[i]] = groupseg[grouplabel[i]]
+        # #         finalgrouplabel[i] = groupcate[grouplabel[i]]
+
         overlapgroupcounts = np.zeros([100, 300])
         groupcounts = np.ones(100)
         x = (pts[:, 0] / gap).astype(np.int32)
@@ -240,6 +315,7 @@ class BlockMerging:
                 volume[x[i], y[i], z[i]] = groupcate[grouplabel[i]]
                 volume_seg[x[i], y[i], z[i]] = groupseg[grouplabel[i]]
                 finalgrouplabel[i] = groupcate[grouplabel[i]]
+
         return finalgrouplabel
 
     def get_result(self) -> np.ndarray:
@@ -381,7 +457,7 @@ class BlockMergingTracker(SegmentationTracker):
         xyz_list = self._convert(xyz_list)
         room_id_list = self._convert(room_id_list)
         ins_targets = self._convert(ins_targets)
-        sem_outputs = np.argmax(self._convert(sem_outputs), axis=-1)
+        sem_outputs = np.argmax(self._convert(sem_outputs), axis=2)
         sem_targets = self._convert(sem_targets)
 
         # Get additional data to evaluate network (number of points, 3)
@@ -402,7 +478,7 @@ class BlockMergingTracker(SegmentationTracker):
         at = 0.5
 
         un = np.unique(ins_outputs)
-        pts_in_pred = [[] for itmp in range(self._num_classes)]
+        pts_in_pred = [[] for _ in range(self._num_classes)]
         for ig, g in enumerate(un):  # each object in prediction
             if g == -1:
                 continue
@@ -449,7 +525,6 @@ class BlockMergingTracker(SegmentationTracker):
         for i_sem in range(self._num_classes):
             tp = [0.0] * len(pts_in_pred[i_sem])
             fp = [0.0] * len(pts_in_pred[i_sem])
-            np.zeros(len(pts_in_gt[i_sem]))
             self._total_gt_ins[i_sem] += len(pts_in_gt[i_sem])
 
             for ip, ins_pred in enumerate(pts_in_pred[i_sem]):
@@ -472,7 +547,7 @@ class BlockMergingTracker(SegmentationTracker):
             self._fpsins[i_sem] += fp
 
     def finalise(self, full_res=False, **kwargs):
-        if full_res:
+        if self._stage != "train" and full_res:
             all_room_ins_outputs, all_room_sem_outputs = self.blcok_merging_list.get_results()
             all_room_additional_data = self.blcok_merging_list.get_additional_data_list()
 
@@ -501,7 +576,7 @@ class BlockMergingTracker(SegmentationTracker):
                 tp = np.sum(tp)
                 fp = np.sum(fp)
                 rec = tp / self._total_gt_ins[i_sem]
-                prec = tp / (tp + fp)
+                prec = tp / np.maximum(tp + fp, np.finfo(np.float).eps)
 
                 precision[i_sem] = prec
                 recall[i_sem] = rec
@@ -512,7 +587,12 @@ class BlockMergingTracker(SegmentationTracker):
     def get_metrics(self, verbose=False) -> Dict[str, Any]:
         metrics = super().get_metrics(verbose)
         if verbose:
-            if self._precision is not None:
+            if (
+                self._precision is not None
+                and self._recall is not None
+                and self._mwcov is not None
+                and self._mucov is not None
+            ):
                 # instance segmentation
                 metrics["{}_precision".format(self._stage)] = self._precision
                 metrics["{}_recall".format(self._stage)] = self._recall
